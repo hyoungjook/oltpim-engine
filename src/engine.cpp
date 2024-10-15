@@ -1,0 +1,296 @@
+#include <filesystem>
+#include <algorithm>
+#include <numa.h>
+#include <assert.h>
+#include "common.h"
+#include "engine.hpp"
+
+// These should be defined at compile time.
+#ifndef DPU_BINARY
+#define DPU_BINARY "oltpim_dpu"
+#endif
+
+namespace oltpim {
+
+void rank_buffer::alloc(int num_dpus) {
+  _num_dpus = num_dpus;
+  bufs = (uint8_t**)malloc(sizeof(uint8_t*) * num_dpus);
+  for (int each_dpu = 0; each_dpu < num_dpus; ++each_dpu) {
+    bufs[each_dpu] = (uint8_t*)aligned_alloc(
+      CACHE_LINE, DPU_BUFFER_SIZE
+    );
+  }
+  offsets = (uint32_t*)malloc(sizeof(uint32_t) * num_dpus);
+  reset_offsets();
+}
+
+rank_buffer::~rank_buffer() {
+  if (bufs) {
+    for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
+      free(bufs[each_dpu]);
+    }
+    free(bufs);
+  }
+  if (offsets) {
+    free(offsets);
+  }
+}
+
+void rank_buffer::reset_offsets() {
+  memset(offsets, 0, sizeof(uint32_t) * _num_dpus);
+}
+
+void rank_buffer::push_args(request *req) {
+  uint32_t dpu_id = req->dpu_id;
+  uint8_t alen = req->alen;
+  // First sizeof(uint32_t) bytes stores the offset 
+  memcpy(&bufs[dpu_id][sizeof(uint32_t) + offsets[dpu_id]], req->args, alen);
+  offsets[dpu_id] += alen;
+}
+
+uint32_t rank_buffer::finalize_args() {
+  uint32_t max_value = 0;
+  for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
+    uint32_t offset = offsets[each_dpu];
+    OLTPIM_ASSERT(offset < DPU_BUFFER_SIZE);
+    // Store offset to the beginning of the buffer
+    *(uint32_t*)bufs[each_dpu] = offset;
+    // Compute max offset
+    max_value = std::max<uint32_t>(max_value, offset);
+  }
+  return sizeof(uint32_t) + max_value;
+}
+
+void rank_buffer::pop_rets(request *req) {
+  uint32_t dpu_id = req->dpu_id;
+  uint8_t rlen = req->rlen;
+  memcpy(req->rets, &bufs[dpu_id][offsets[dpu_id]], rlen);
+  offsets[dpu_id] += rlen;
+  req->done = true;
+}
+
+request_list::request_list() {
+  _head.store(nullptr);
+}
+
+void request_list::push(request *req) {
+  // assume req is pre-allocated and not released until we set *done
+  request *curr_head = _head.load(std::memory_order_seq_cst);
+  do {
+    req->next = curr_head;
+  } while (
+    !_head.compare_exchange_strong(curr_head, req, std::memory_order_seq_cst)
+  );
+}
+
+request *request_list::move() {
+  // other is not concurrently accessed
+  return _head.exchange(nullptr, std::memory_order_seq_cst);
+}
+
+int rank_engine::init(config conf, information info) {
+  // Initialize rank controller
+  _rank.init(conf.dpu_rank);
+  _rank.load(info.dpu_binary);
+  {
+    uint32_t args_symbol_id = _rank.register_dpu_symbol(info.dpu_args_symbol);
+    uint32_t rets_symbol_id = _rank.register_dpu_symbol(info.dpu_rets_symbol);
+    OLTPIM_ASSERT(args_symbol_id == dpu_args_symbol_id);
+    OLTPIM_ASSERT(rets_symbol_id == dpu_rets_symbol_id);
+  }
+  _num_dpus = _rank.num_dpus();
+
+  // Request list
+  _num_numa_nodes = info.num_numa_nodes;
+  _request_lists_per_numa_node.alloc(_num_numa_nodes);
+
+  // Buffers
+  _buffer.alloc(_num_dpus);
+  _rets_offset_counter = std::vector<uint32_t>(_num_dpus, 0);
+
+  // Lock
+  _process_lock.store(false);
+
+  // Return number of dpus
+  return _num_dpus;
+}
+
+void rank_engine::push(request *req, int core_id) {
+  int numa_node = numa_node_of_cpu(core_id);
+  _request_lists_per_numa_node[numa_node].push(req);
+}
+
+void rank_engine::process() {
+  bool lock_acquired = false;
+  if (_process_lock.compare_exchange_strong(lock_acquired, true)) {
+    // Gather requests to this rank
+    std::vector<request*> rlists(_num_numa_nodes);
+    for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+      rlists[each_node] = _request_lists_per_numa_node[each_node].move();
+    }
+
+    // Construct buffer
+    bool something_exists = false;
+    _buffer.reset_offsets();
+    memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
+    for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+      request *req = rlists[each_node];
+      while (req) {
+        _buffer.push_args(req);
+        _rets_offset_counter[req->dpu_id] += req->rlen;
+        something_exists = true;
+        req = req->next;
+      }
+    }
+    if (!something_exists) {
+      _process_lock.store(false);
+      return;
+    }
+    uint32_t max_length = _buffer.finalize_args();
+    max_length = ALIGN8(max_length);
+    uint32_t max_rlength = 0;
+    for (uint32_t &roffset: _rets_offset_counter) {
+      max_rlength = std::max<uint32_t>(max_rlength, roffset);
+    }
+    max_rlength = ALIGN8(max_rlength);
+
+    // Copy args to rank
+    _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, max_length, true);
+
+    // Launch
+    _rank.launch();
+    //_rank.log_read(stdout);
+
+    // Copy rets from rank
+    _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, max_rlength, false);
+
+    // Distribute results: the traversal order should be the same as construction
+    _buffer.reset_offsets();
+    for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+      request *req = rlists[each_node];
+      while (req) {
+        _buffer.pop_rets(req);
+        req = req->next;
+      }
+    }
+
+    _process_lock.store(false);
+  }
+}
+
+void engine::init(config conf) {
+  // Information
+  auto dpu_binary_path = std::filesystem::canonical("/proc/self/exe");
+  dpu_binary_path = dpu_binary_path.parent_path().append(DPU_BINARY);
+  rank_engine::information rank_info;
+  rank_info.dpu_binary = dpu_binary_path.c_str();
+  rank_info.dpu_args_symbol = TOSTRING(DPU_ARGS_SYMBOL);
+  rank_info.dpu_rets_symbol = TOSTRING(DPU_RETS_SYMBOL);
+
+  OLTPIM_ASSERT(numa_available() >= 0);
+  _num_numa_nodes = numa_max_node() + 1;
+  _num_ranks_per_numa_node = conf.num_ranks_per_numa_node;
+  _num_ranks = _num_ranks_per_numa_node * _num_numa_nodes;
+  rank_info.num_numa_nodes = _num_numa_nodes;
+
+  // Allocate all physical ranks
+  std::vector<void*> dpu_ranks;
+  while (true) {
+    void *dpu_rank = upmem::rank::static_alloc();
+    if (!dpu_rank) break;
+    dpu_ranks.push_back(dpu_rank);
+  }
+
+  // Filter out ranks per numa node
+  int rank_count_per_numa_node[_num_numa_nodes] = {0,};
+  for (void* &dpu_rank: dpu_ranks) {
+    int numa_id = upmem::rank::numa_node_of(dpu_rank);
+    if (rank_count_per_numa_node[numa_id] >= _num_ranks_per_numa_node) {
+      upmem::rank::static_free(dpu_rank);
+      dpu_rank = nullptr;
+    }
+    else {
+      ++rank_count_per_numa_node[numa_id];
+    }
+  }
+  // Check if enough ranks available per numa node
+  for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+    if (rank_count_per_numa_node[each_node] != _num_ranks_per_numa_node) {
+      fprintf(stderr, "Numa node %d doesn't have enough PIM ranks: %d < %d\n",
+        each_node, rank_count_per_numa_node[each_node], _num_ranks_per_numa_node);
+      for (void *dpu_rank: dpu_ranks) {
+        if (dpu_rank) upmem::rank::static_free(dpu_rank);
+      }
+      exit(1);
+    }
+  }
+  // Erase nullptrs
+  dpu_ranks.erase(std::remove_if(dpu_ranks.begin(), dpu_ranks.end(),
+    [](const void *dpu_rank){return dpu_rank == nullptr;}), dpu_ranks.end());
+  OLTPIM_ASSERT(dpu_ranks.size() == (size_t)_num_ranks);
+
+  // Allocate rank engines
+  _rank_engines = std::vector<rank_engine>(_num_ranks);
+  _rank_buffers = std::vector<rank_buffer>(_num_ranks);
+  _num_dpus = 0;
+  _num_dpus_per_rank = std::vector<int>(_num_ranks);
+  _numa_id_to_rank_ids = std::vector<std::vector<int>>(_num_numa_nodes);
+  for (int each_rank = 0; each_rank < _num_ranks; ++each_rank) {
+    rank_engine::config rank_config;
+    rank_config.dpu_rank = dpu_ranks[each_rank];
+    auto &re = _rank_engines[each_rank];
+    int num_dpus_this_rank = re.init(
+      rank_config, rank_info
+    );
+    _rank_buffers[each_rank].alloc(num_dpus_this_rank);
+    _num_dpus += num_dpus_this_rank;
+    _num_dpus_per_rank[each_rank] = num_dpus_this_rank;
+    _numa_id_to_rank_ids[re.get_rank().numa_node()].push_back(each_rank);
+  }
+
+  printf("Engine initialized for %d NUMA node(s) x %d PIM rank(s)\n",
+    _num_numa_nodes, _num_ranks_per_numa_node);
+}
+
+void engine::push(int pim_id, request *req, int sys_core_id) {
+  // Push to the rank engine
+  int rank_id = 0, dpu_id = 0;
+  pim_id_to_rank_dpu_id(pim_id, rank_id, dpu_id);
+  req->dpu_id = dpu_id;
+  req->done = false;
+  _rank_engines[rank_id].push(req, sys_core_id);
+
+  // Process this numa node's rank
+  process_local_numa_rank(sys_core_id);
+}
+
+bool engine::is_done(request *req, int sys_core_id) {
+  if (req->done) return true;
+  process_local_numa_rank(sys_core_id);
+  return req->done;
+}
+
+void engine::pim_id_to_rank_dpu_id(int pim_id, int &rank_id, int &dpu_id) {
+  assert(0 <= pim_id && pim_id < _num_dpus);
+  int dpu_cnt = 0;
+  for (rank_id = 0; rank_id < _num_ranks; ++rank_id) {
+    int num_dpus_this_rank = _num_dpus_per_rank[rank_id];
+    if (pim_id < dpu_cnt + num_dpus_this_rank) {
+      dpu_id = pim_id - dpu_cnt;
+      return;
+    }
+    dpu_cnt += num_dpus_this_rank;
+  }
+  assert(false);
+}
+
+void engine::process_local_numa_rank(int sys_core_id) {
+  int numa_node_id = numa_node_of_cpu(sys_core_id);
+  // Get ranks of this numa node
+  auto &rank_ids = _numa_id_to_rank_ids[numa_node_id];
+  for (int rank_id: rank_ids) {
+    _rank_engines[rank_id].process();
+  }
+}
+
+}
