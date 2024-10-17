@@ -35,11 +35,11 @@ execute_process(COMMAND dpu-pkg-config --libs dpu
 set(CFLAGS
   ${COMMON_CFLAGS} ${CFLAGS_DPU_CONFIG}
   -DDPU_BINARY=\"${DPU_BINARY}\"
-  -std=c++20
+  -std=c++17
 )
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
-set(LDFLAGS ${LDFLAGS_DPU_CONFIG})
+set(LDFLAGS ${LDFLAGS_DPU_CONFIG} pthread stdc++fs)
 add_executable(${HOST_BINARY})
 file(GLOB SRC_FILES src/*.cpp)
 target_sources(${HOST_BINARY} PRIVATE ${SRC_FILES})
