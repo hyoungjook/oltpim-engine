@@ -65,7 +65,7 @@ class rank_engine {
   inline void push(request *req, int core_id);
 
   // Process requests; if conflict, do nothing
-  void process();
+  bool process();
 
   inline upmem::rank &get_rank() {return _rank;}
 
@@ -94,6 +94,7 @@ class engine {
   // pending requests.
   void push(int pim_id, request *req, int sys_core_id);
   bool is_done(request *req, int sys_core_id);
+  void drain_all(int sys_core_id);
 
   inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id].get_rank();}
   inline int num_pims() {return _num_dpus;}
@@ -114,7 +115,7 @@ class engine {
 
   // Structures for numa_node_id -> [rank_id]s
   std::vector<std::vector<int>> _numa_id_to_rank_ids;
-  void process_local_numa_rank(int sys_core_id);
+  bool process_local_numa_rank(int sys_core_id);
 
 };
 

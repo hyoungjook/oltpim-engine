@@ -87,7 +87,7 @@ int main(int argc, char *argv[]) {
 
       if (done) break;
     }
-
+    engine.drain_all(sys_core_id);
   };
 
   auto lap_fn = [&]() {

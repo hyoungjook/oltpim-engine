@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <numa.h>
 #include <assert.h>
+#include <unistd.h>
 #include "common.h"
 #include "engine.hpp"
 
@@ -120,8 +121,9 @@ void rank_engine::push(request *req, int core_id) {
   _request_lists_per_numa_node[numa_node].push(req);
 }
 
-void rank_engine::process() {
+bool rank_engine::process() {
   bool lock_acquired = false;
+  bool something_exists = false;
   if (_process_lock.compare_exchange_strong(lock_acquired, true)) {
     // Gather requests to this rank
     std::vector<request*> rlists(_num_numa_nodes);
@@ -130,7 +132,6 @@ void rank_engine::process() {
     }
 
     // Construct buffer
-    bool something_exists = false;
     _buffer.reset_offsets();
     memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
     for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
@@ -144,7 +145,7 @@ void rank_engine::process() {
     }
     if (!something_exists) {
       _process_lock.store(false);
-      return;
+      return false;
     }
     uint32_t max_length = _buffer.finalize_args();
     max_length = ALIGN8(max_length);
@@ -176,6 +177,7 @@ void rank_engine::process() {
 
     _process_lock.store(false);
   }
+  return something_exists;
 }
 
 void engine::init(config conf) {
@@ -270,6 +272,17 @@ bool engine::is_done(request *req, int sys_core_id) {
   return req->done;
 }
 
+void engine::drain_all(int sys_core_id) {
+  while (true) {
+    bool something_exists = process_local_numa_rank(sys_core_id);
+    if (!something_exists) {
+      sleep(1);
+      something_exists = process_local_numa_rank(sys_core_id);
+      if (!something_exists) break;
+    }
+  }
+}
+
 void engine::pim_id_to_rank_dpu_id(int pim_id, int &rank_id, int &dpu_id) {
   assert(0 <= pim_id && pim_id < _num_dpus);
   int dpu_cnt = 0;
@@ -284,13 +297,16 @@ void engine::pim_id_to_rank_dpu_id(int pim_id, int &rank_id, int &dpu_id) {
   assert(false);
 }
 
-void engine::process_local_numa_rank(int sys_core_id) {
+bool engine::process_local_numa_rank(int sys_core_id) {
+  bool something_exists = false;
   int numa_node_id = numa_node_of_cpu(sys_core_id);
   // Get ranks of this numa node
   auto &rank_ids = _numa_id_to_rank_ids[numa_node_id];
   for (int rank_id: rank_ids) {
-    _rank_engines[rank_id].process();
+    bool exists = _rank_engines[rank_id].process();
+    something_exists = something_exists || exists;
   }
+  return something_exists;
 }
 
 }
