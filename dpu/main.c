@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <mutex.h>
 #include <barrier.h>
+#include <stdbool.h>
 #include "common.h"
 #include "global.h"
 
@@ -14,32 +15,30 @@
 __mram_noinit uint8_t ARGS_BUF[DPU_BUFFER_SIZE];
 __mram_noinit uint8_t RETS_BUF[DPU_BUFFER_SIZE];
 
-uint8_t initialized = 0;
+bool initialized = false;
 BARRIER_INIT(main_barrier, NR_TASKLETS);
 
 // Args reader
 MUTEX_INIT(args_mutex);
 seqreader_buffer_t args_reader_cache;
 seqreader_t args_reader;
-uint8_t *args_ptr, *args_ptr_end;
+uint8_t *args_ptr;
+uint32_t args_offset, args_total_offset;
 __mram_ptr uint8_t *rets_ptr;
-
-// Rets writer
-MUTEX_INIT(rets_mutex);
 
 int main() {
   if (me() == 0) {
     // Initialize
     if (!initialized) {
       args_reader_cache = seqread_alloc();
-      initialized = 1;
+      initialized = true;
     }
 
     // Setup args reader
     args_ptr = seqread_init(args_reader_cache, ARGS_BUF, &args_reader);
-    uint32_t total_args_offset = *(uint32_t*)args_ptr;
+    args_offset = 0;
+    args_total_offset = *(uint32_t*)args_ptr;
     args_ptr = seqread_get(args_ptr, sizeof(uint32_t), &args_reader);
-    args_ptr_end = args_ptr + total_args_offset;
     rets_ptr = (__mram_ptr uint8_t*)RETS_BUF;
   }
   barrier_wait(&main_barrier);
@@ -54,11 +53,12 @@ int main() {
     __mram_ptr uint8_t *retp;
     // Copy arg into tasklet-local buffer
     mutex_lock(args_mutex);
-    if (args_ptr >= args_ptr_end) {
+    if (args_offset >= args_total_offset) {
       mutex_unlock(args_mutex);
       break;
     }
     arg = *(arg_t*)args_ptr;
+    args_offset += sizeof(arg_t);
     args_ptr = seqread_get(args_ptr, sizeof(arg_t), &args_reader);
     retp = rets_ptr;
     rets_ptr += sizeof(ret_t);
@@ -66,11 +66,10 @@ int main() {
 
     // Compute
     ret = arg + 7;
+    //printf("[%d] %u -> %lu\n", me(), arg, ret);
 
-    // Write ret to mram buffer
-    mutex_lock(rets_mutex);
+    // Write ret to mram buffer, assume 8B-aligned
     mram_write(&ret, retp, sizeof(ret_t));
-    mutex_unlock(rets_mutex);
   }
 
   return 0;

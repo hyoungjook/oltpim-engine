@@ -1,5 +1,5 @@
-#ifndef __COMMON_H__
-#define __COMMON_H__
+#ifndef __OLTPIM_COMMON_H__
+#define __OLTPIM_COMMON_H__
 
 // args and rets
 #define DPU_ARGS_SYMBOL global_args_buf_interface_

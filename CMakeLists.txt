@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
 
 project(oltpim-engine)
@@ -11,16 +11,28 @@ set(COMMON_CFLAGS -Wall -Werror)
 
 # DPU codes: only *.c
 set(DPU_BINARY oltpim_dpu)
-set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=1)
-set(CMAKE_C_FLAGS_DEBUG "-O0 -g3")
-set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
-set(DPU_LDFLAGS )
-set(CMAKE_C_COMPILER dpu-upmem-dpurte-clang)
-add_executable(${DPU_BINARY})
+set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=8)
+set(DPU_CFLAGS_DEBUG -O0 -g3)
+set(DPU_CFLAGS_RELEASE -O3 -DNDEBUG)
+set(DPU_C_COMPILER dpu-upmem-dpurte-clang)
 file(GLOB DPU_FILES dpu/*.c)
-target_sources(${DPU_BINARY} PRIVATE ${DPU_FILES})
-target_compile_options(${DPU_BINARY} PRIVATE ${DPU_CFLAGS})
-target_link_libraries(${DPU_BINARY} PRIVATE ${DPU_LDFLAGS})
+
+get_property(INCLUDE_DIRS DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
+set(INCLUDE_FLAGS "")
+foreach(dir ${INCLUDE_DIRS})
+    set(INCLUDE_FLAGS ${INCLUDE_FLAGS} "-I${dir}")
+endforeach()
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  set(DPU_CFLAGS ${DPU_CFLAGS} ${DPU_CFLAGS_RELEASE})
+elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(DPU_CFLAGS ${DPU_CFLAGS} ${DPU_CFLAGS_DEBUG})
+endif()
+add_custom_command(
+  OUTPUT ${DPU_BINARY}
+  COMMAND ${DPU_C_COMPILER} ${INCLUDE_FLAGS} ${DPU_CFLAGS} -o ${DPU_BINARY} ${DPU_FILES}
+  DEPENDS ${DPU_FILES}
+)
+add_custom_target(build_dpu_binary ALL DEPENDS ${DPU_BINARY})
 
 # Host codes: only *.cpp
 set(HOST_BINARY oltpim)
