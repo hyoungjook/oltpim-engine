@@ -6,6 +6,7 @@
 #include <chrono>
 #include <numa.h>
 #include "engine.hpp"
+#include "common.h"
 
 thread_local std::random_device _random_device;
 thread_local std::mt19937 _rand_gen(_random_device());
@@ -83,27 +84,55 @@ int main(int argc, char *argv[]) {
       pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
     }
 
+    std::uniform_int_distribution<> rand_type(0, 1);
     std::uniform_int_distribution<uint32_t> rand_arg(1, 16384);
     uint32_t num_pims = engine.num_pims();
     while (true) {
-      oltpim::request req[batch_size];
-      uint32_t arg[batch_size];
-      uint64_t ret[batch_size];
+      oltpim::request reqs[batch_size];
+      args_any_t args[batch_size];
+      rets_any_t rets[batch_size];
+      request_type_t types[batch_size];
       for (int i = 0; i < batch_size; ++i) {
-        arg[i] = rand_arg(_rand_gen);
-        ret[i] = 0;
-        req[i] = oltpim::request(&arg[i], &ret[i], sizeof(uint32_t), sizeof(uint64_t));
-        engine.push(arg[i] % num_pims, &req[i], sys_core_id);
+        types[i] = (request_type_t)rand_type(_rand_gen);
+        uint32_t rand_val = rand_arg(_rand_gen);
+        uint8_t args_size = 0, rets_size = 0;
+        switch (types[i]) {
+        case request_type_insert: {
+          args[i].insert.value = rand_val;
+          args_size = sizeof(args_insert_t);
+          rets_size = sizeof(rets_insert_t);
+        } break;
+        case request_type_get: {
+          args[i].get.key[0] = rand_val;
+          args_size = sizeof(args_get_t);
+          rets_size = sizeof(rets_get_t);
+        } break;
+        }
+        reqs[i] = oltpim::request(types[i], &args[i], &rets[i], args_size, rets_size);
+        engine.push(rand_val % num_pims, &reqs[i], sys_core_id);
       }
 
       for (int i = 0; i < batch_size; ++i) {
-        while (!engine.is_done(&req[i], sys_core_id));
+        while (!engine.is_done(&reqs[i], sys_core_id));
       }
 
       for (int i = 0; i < batch_size; ++i) {
         //printf("T[%d]: %u -> %lu\n", sys_core_id, arg, ret);
-        if (arg[i] + 7 != ret[i]) {
-          fprintf(stderr, "%d != %lu wrong\n", arg[i], ret[i]);
+        switch (types[i]) {
+        case request_type_insert: {
+          if (args[i].insert.value + 7 != rets[i].insert.old_value) {
+            fprintf(stderr, "%u + 7 != %u wrong\n", args[i].insert.value, rets[i].insert.old_value);
+            exit(1);
+          }
+        } break;
+        case request_type_get: {
+          if (args[i].get.key[0] + 8 != rets[i].get.value) {
+            fprintf(stderr, "%u + 8 != %u wrong\n", args[i].get.key[0], rets[i].get.value);
+            exit(1);
+          }
+        } break;
+        default:
+          fprintf(stderr, "unknown request_type\n");
           exit(1);
         }
       }

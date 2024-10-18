@@ -13,10 +13,11 @@ struct request {
   void *args, *rets;  // User input
   uint32_t dpu_id;    // Filled internally
   uint8_t alen, rlen; // User input
+  uint8_t req_type;   // User input
   volatile bool done; // Used internally
   request() {}
-  request(void *args_, void *rets_, uint8_t alen_, uint8_t rlen_)
-    : args(args_), rets(rets_), alen(alen_), rlen(rlen_) {}
+  request(uint8_t req_type_, void *args_, void *rets_, uint8_t alen_, uint8_t rlen_)
+    : args(args_), rets(rets_), alen(alen_), rlen(rlen_), req_type(req_type_) {}
 };
 
 struct rank_buffer {

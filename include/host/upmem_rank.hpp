@@ -36,7 +36,7 @@ class rank {
   void broadcast(uint32_t symbol_id, void *buffer, uint32_t length,
     uint32_t symbol_offset = 0);
 
-  void log_read(FILE *stream);
+  void log_read(FILE *stream, bool fault_only = false);
 
   inline int num_dpus() {return _num_dpus;}
   inline int numa_node() {return _numa_node;}

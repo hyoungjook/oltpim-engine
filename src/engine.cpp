@@ -44,9 +44,12 @@ void rank_buffer::reset_offsets() {
 void rank_buffer::push_args(request *req) {
   uint32_t dpu_id = req->dpu_id;
   uint8_t alen = req->alen;
+  uint8_t req_type = req->req_type;
   // First sizeof(uint32_t) bytes stores the offset 
-  memcpy(&bufs[dpu_id][sizeof(uint32_t) + offsets[dpu_id]], req->args, alen);
-  offsets[dpu_id] += alen;
+  uint8_t *buf = &bufs[dpu_id][sizeof(uint32_t) + offsets[dpu_id]];
+  buf[0] = req_type;
+  memcpy(buf + sizeof(uint8_t), req->args, alen);
+  offsets[dpu_id] += (sizeof(uint8_t) + alen);
 }
 
 uint32_t rank_buffer::finalize_args() {
@@ -160,8 +163,13 @@ bool rank_engine::process() {
     _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, max_length, true);
 
     // Launch
-    _rank.launch();
+    bool succeed = _rank.launch();
     //_rank.log_read(stdout);
+    if (!succeed) {
+      fprintf(stderr, "Rank[%d] in fault\n", _rank_id);
+      //_rank.log_read(stderr, true);
+      exit(1);
+    }
 
     // Copy rets from rank
     _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, max_rlength, false);

@@ -7,8 +7,10 @@
 #include <mutex.h>
 #include <barrier.h>
 #include <stdbool.h>
+#include <string.h>
 #include "common.h"
 #include "global.h"
+#include "requests.h"
 
 #define ARGS_BUF DPU_ARGS_SYMBOL
 #define RETS_BUF DPU_RETS_SYMBOL
@@ -44,11 +46,11 @@ int main() {
   barrier_wait(&main_barrier);
 
   // Process requests
-  typedef uint32_t arg_t;
-  typedef uint64_t ret_t;
-  static_assert(sizeof(ret_t) % 8 == 0, "");
-  arg_t arg;
-  __dma_aligned ret_t ret;
+  args_any_t arg;
+  __dma_aligned rets_any_t ret;
+  request_type_t request_type;
+  uint32_t request_arg_size = 0;
+  uint32_t request_ret_size = 0;
   while (true) {
     __mram_ptr uint8_t *retp;
     // Copy arg into tasklet-local buffer
@@ -57,19 +59,30 @@ int main() {
       mutex_unlock(args_mutex);
       break;
     }
-    arg = *(arg_t*)args_ptr;
-    args_offset += sizeof(arg_t);
-    args_ptr = seqread_get(args_ptr, sizeof(arg_t), &args_reader);
+    request_type = (request_type_t)(*(uint8_t*)args_ptr);
+    args_ptr = seqread_get(args_ptr, sizeof(uint8_t), &args_reader);
+
+    #define case_get_arg_and_size(name) \
+    memcpy(&arg.name, args_ptr, sizeof(args_##name##_t)); \
+    request_arg_size = sizeof(args_##name##_t); \
+    request_ret_size = sizeof(rets_##name##_t);
+
+    REQUEST_SWITCH_CASE(request_type, case_get_arg_and_size)
+
+    #undef case_get_arg_and_size
+
+    args_offset += (sizeof(uint8_t) + request_arg_size);
+    args_ptr = seqread_get(args_ptr, request_arg_size, &args_reader);
+
     retp = rets_ptr;
-    rets_ptr += sizeof(ret_t);
+    rets_ptr += request_ret_size;
     mutex_unlock(args_mutex);
 
-    // Compute
-    ret = arg + 7;
-    //printf("[%d] %u -> %lu\n", me(), arg, ret);
+    // Process request
+    process_request(request_type, &arg, &ret);
 
     // Write ret to mram buffer, assume 8B-aligned
-    mram_write(&ret, retp, sizeof(ret_t));
+    mram_write(&ret, retp, request_ret_size);
   }
 
   return 0;

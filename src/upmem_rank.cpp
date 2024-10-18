@@ -70,12 +70,11 @@ void rank::load(const char *binary_path) {
 bool rank::launch(bool async) {
   DPU_ASSERT(dpu_boot_rank(_rank));
   if (!async) {
-    bool done = false, fault = false;
+    bool fault = false;
     while (true) {
-      done = is_done(&fault);
-      if (fault) return false;
-      if (done) return true;
+      if (is_done(&fault)) break;
     }
+    return !fault;
   }
   return true;
 }
@@ -85,7 +84,7 @@ bool rank::is_done(bool *fault) {
   DPU_ASSERT(dpu_poll_rank(_rank));
   DPU_ASSERT(dpu_status_rank(_rank, &_done, &_fault));
   if (fault) *fault = _fault;
-  return _done || _fault;
+  return _done;
 }
 
 uint32_t rank::register_dpu_symbol(const char *symbol) {
@@ -158,9 +157,18 @@ void rank::broadcast(uint32_t symbol_id, void *buffer, uint32_t length,
   DPU_ASSERT(copy_fn(_rank, &matrix));
 }
 
-void rank::log_read(FILE *stream) {
+static std::mutex log_print_mutex;
+
+void rank::log_read(FILE *stream, bool fault_only) {
+  std::unique_lock lck(log_print_mutex);
   struct dpu_t *dpu;
   STRUCT_DPU_FOREACH(_rank, dpu) {
+    if (fault_only) {
+      bool done = false, fault = false;
+      DPU_ASSERT(dpu_status_dpu(dpu, &done, &fault));
+      if (!fault) continue;
+    }
+    fprintf(stream, "===\n");
     DPU_ASSERT(dpulog_read_for_dpu(dpu, stream));
   }
 }
