@@ -18,6 +18,9 @@ void *rank::static_alloc(const char *profile) {
     if (status == DPU_ERR_ALLOCATION) rank = nullptr;
     else DPU_ASSERT(status);
   }
+  if (rank) {
+    DPU_ASSERT(dpu_reset_rank(rank));
+  }
   return (void*)rank;
 }
 

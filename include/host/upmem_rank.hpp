@@ -5,14 +5,15 @@
 
 extern "C" {
   #include <dpu.h>
-  #include <dpu_management.h>
-  #include <dpu_loader.h>
+  #include <dpu_config.h>
+  #include <dpu_debug.h>
   #include <dpu_elf.h>
+  #include <dpu_loader.h>
+  #include <dpu_log.h>
+  #include <dpu_management.h>
+  #include <dpu_memory.h>
   #include <dpu_program.h>
   #include <dpu_runner.h>
-  #include <dpu_log.h>
-  #include <dpu_debug.h>
-  #include <dpu_memory.h>
 }
 
 namespace upmem {
