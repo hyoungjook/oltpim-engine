@@ -91,6 +91,7 @@ request *request_list::move() {
 
 int rank_engine::init(config conf, information info) {
   // Initialize rank controller
+  _rank_id = info.rank_id;
   _rank.init(conf.dpu_rank);
   _rank.load(info.dpu_binary);
   {
@@ -241,6 +242,7 @@ void engine::init(config conf) {
     rank_engine::config rank_config;
     rank_config.dpu_rank = dpu_ranks[each_rank];
     auto &re = _rank_engines[each_rank];
+    rank_info.rank_id = each_rank;
     int num_dpus_this_rank = re.init(
       rank_config, rank_info
     );

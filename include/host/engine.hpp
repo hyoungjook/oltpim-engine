@@ -54,6 +54,7 @@ class rank_engine {
     void *dpu_rank;
   };
   struct information { // info passed from parent engine
+    int rank_id;
     int num_numa_nodes;
     const char *dpu_binary;
     const char *dpu_args_symbol, *dpu_rets_symbol;
@@ -70,6 +71,7 @@ class rank_engine {
   inline upmem::rank &get_rank() {return _rank;}
 
  private:
+  int _rank_id;
   upmem::rank _rank;
   int _num_dpus;
   int _num_numa_nodes;
