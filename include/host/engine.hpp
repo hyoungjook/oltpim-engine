@@ -5,6 +5,7 @@
 #include "global.hpp"
 #include "config.hpp"
 #include "upmem_rank.hpp"
+#include "common.h"
 
 namespace oltpim {
 
@@ -29,6 +30,7 @@ struct rank_buffer {
 
   // Constructing the args buffer
   inline void push_args(request *req);
+  inline void push_priority_separator();
   inline uint32_t finalize_args();
 
   // Distributing the rets buffer
@@ -76,6 +78,7 @@ class rank_engine {
   upmem::rank _rank;
   int _num_dpus;
   int _num_numa_nodes;
+  static constexpr int num_priorities = NUM_PRIORITIES;
   array<request_list> _request_lists_per_numa_node;
   rank_buffer _buffer;
   static constexpr uint32_t dpu_args_symbol_id = 0;

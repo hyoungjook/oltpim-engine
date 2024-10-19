@@ -3,7 +3,6 @@
 #include <numa.h>
 #include <assert.h>
 #include <unistd.h>
-#include "common.h"
 #include "engine.hpp"
 
 // These should be defined at compile time.
@@ -12,6 +11,13 @@
 #endif
 
 namespace oltpim {
+
+// Priorities of request type.
+static const int request_type_priority[] = {
+#define REQUEST_TYPE_PRIORITY(_1, _2, priority, ...) priority,
+REQUEST_TYPES_LIST(REQUEST_TYPE_PRIORITY)
+#undef REQUEST_TYPE_PRIORITY
+};
 
 void rank_buffer::alloc(int num_dpus) {
   _num_dpus = num_dpus;
@@ -50,6 +56,14 @@ void rank_buffer::push_args(request *req) {
   buf[0] = req_type;
   memcpy(buf + sizeof(uint8_t), req->args, alen);
   offsets[dpu_id] += (sizeof(uint8_t) + alen);
+}
+
+void rank_buffer::push_priority_separator() {
+  for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
+    // Separator is request_type 0xFF
+    bufs[each_dpu][sizeof(uint32_t) + offsets[each_dpu]] = (uint8_t)request_type_priority_separator;
+    ++offsets[each_dpu];
+  }
 }
 
 uint32_t rank_buffer::finalize_args() {
@@ -107,7 +121,7 @@ int rank_engine::init(config conf, information info) {
 
   // Request list
   _num_numa_nodes = info.num_numa_nodes;
-  _request_lists_per_numa_node.alloc(_num_numa_nodes);
+  _request_lists_per_numa_node.alloc(_num_numa_nodes * num_priorities);
 
   // Buffers
   _buffer.alloc(_num_dpus);
@@ -122,7 +136,8 @@ int rank_engine::init(config conf, information info) {
 
 void rank_engine::push(request *req, int core_id) {
   int numa_node = numa_node_of_cpu(core_id);
-  _request_lists_per_numa_node[numa_node].push(req);
+  int priority = request_type_priority[req->req_type];
+  _request_lists_per_numa_node[numa_node * num_priorities + priority].push(req);
 }
 
 bool rank_engine::process() {
@@ -130,21 +145,29 @@ bool rank_engine::process() {
   bool something_exists = false;
   if (_process_lock.compare_exchange_strong(lock_acquired, true)) {
     // Gather requests to this rank
-    std::vector<request*> rlists(_num_numa_nodes);
-    for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-      rlists[each_node] = _request_lists_per_numa_node[each_node].move();
+    std::vector<request*> rlists(_num_numa_nodes * num_priorities);
+    for (int priority = 0; priority < num_priorities; ++priority) {
+      for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+        rlists[priority * _num_numa_nodes + each_node] = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
+      }
     }
 
     // Construct buffer
     _buffer.reset_offsets();
     memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
-    for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-      request *req = rlists[each_node];
-      while (req) {
-        _buffer.push_args(req);
-        _rets_offset_counter[req->dpu_id] += req->rlen;
-        something_exists = true;
-        req = req->next;
+    for (int priority = 0; priority < num_priorities; ++priority) {
+      for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+        request *req = rlists[priority * _num_numa_nodes + each_node];
+        while (req) {
+          _buffer.push_args(req);
+          _rets_offset_counter[req->dpu_id] += req->rlen;
+          something_exists = true;
+          req = req->next;
+        }
+      }
+      // Insert separator
+      if (priority < num_priorities - 1) {
+        _buffer.push_priority_separator();
       }
     }
     if (!something_exists) {
@@ -167,7 +190,7 @@ bool rank_engine::process() {
     //_rank.log_read(stdout);
     if (!succeed) {
       fprintf(stderr, "Rank[%d] in fault\n", _rank_id);
-      //_rank.log_read(stderr, true);
+      _rank.log_read(stderr, true);
       exit(1);
     }
 
@@ -176,11 +199,13 @@ bool rank_engine::process() {
 
     // Distribute results: the traversal order should be the same as construction
     _buffer.reset_offsets();
-    for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-      request *req = rlists[each_node];
-      while (req) {
-        _buffer.pop_rets(req);
-        req = req->next;
+    for (int priority = 0; priority < num_priorities; ++priority) {
+      for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+        request *req = rlists[priority * _num_numa_nodes + each_node];
+        while (req) {
+          _buffer.pop_rets(req);
+          req = req->next;
+        }
       }
     }
 

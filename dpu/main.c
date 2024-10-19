@@ -27,6 +27,7 @@ seqreader_t args_reader;
 uint8_t *args_ptr;
 uint32_t args_offset, args_total_offset;
 __mram_ptr uint8_t *rets_ptr;
+uint8_t priority_frontier;
 
 int main() {
   if (me() == 0) {
@@ -43,6 +44,7 @@ int main() {
     args_total_offset = *(uint32_t*)args_ptr;
     args_ptr = seqread_get(args_ptr, sizeof(uint32_t), &args_reader);
     rets_ptr = (__mram_ptr uint8_t*)RETS_BUF;
+    priority_frontier = 0;
   }
   barrier_wait(&main_barrier);
 
@@ -52,31 +54,52 @@ int main() {
   request_type_t request_type;
   uint32_t request_arg_size = 0;
   uint32_t request_ret_size = 0;
+  uint8_t curr_priority = 0;
   while (true) {
     __mram_ptr uint8_t *retp;
-    // Copy arg into tasklet-local buffer
+
+    // Mutex block: Copy args into local arg
     mutex_lock(args_mutex);
+
+      // Check priority barrier
+    if (curr_priority < priority_frontier) {
+      assert(curr_priority + 1 == priority_frontier);
+      curr_priority = priority_frontier;
+      mutex_unlock(args_mutex);
+      barrier_wait(&main_barrier);
+      mutex_lock(args_mutex);
+    }
+
+      // Check if all done
     if (args_offset >= args_total_offset) {
       mutex_unlock(args_mutex);
       break;
     }
+
+      // Fetch request type
     request_type = (request_type_t)(*(uint8_t*)args_ptr);
     args_ptr = seqread_get(args_ptr, sizeof(uint8_t), &args_reader);
 
+      // Switch for request type
+      // If priority separator, increment frontier and skip processing
     #define case_get_arg_and_size(name) \
     memcpy(&arg.name, args_ptr, sizeof(args_##name##_t)); \
     request_arg_size = sizeof(args_##name##_t); \
     request_ret_size = sizeof(rets_##name##_t);
-
-    REQUEST_SWITCH_CASE(request_type, case_get_arg_and_size)
-
+    REQUEST_SWITCH_CASE(request_type, case_get_arg_and_size,
+      ++priority_frontier;
+      ++args_offset;
+      mutex_unlock(args_mutex);
+      continue;
+    )
     #undef case_get_arg_and_size
 
+      // Update pointers
     args_offset += (sizeof(uint8_t) + request_arg_size);
     args_ptr = seqread_get(args_ptr, request_arg_size, &args_reader);
-
     retp = rets_ptr;
     rets_ptr += request_ret_size;
+    // Mutex block end
     mutex_unlock(args_mutex);
 
     // Process request
@@ -86,5 +109,6 @@ int main() {
     mram_write(&ret, retp, request_ret_size);
   }
 
+  assert(priority_frontier == NUM_PRIORITIES - 1);
   return 0;
 }

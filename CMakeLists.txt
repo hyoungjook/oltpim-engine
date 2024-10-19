@@ -11,7 +11,7 @@ set(COMMON_CFLAGS -Wall -Werror)
 
 # DPU codes: only *.c
 set(DPU_BINARY oltpim_dpu)
-set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=1)
+set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=8)
 set(DPU_CFLAGS_DEBUG -O0 -g3)
 set(DPU_CFLAGS_RELEASE -O3 -DNDEBUG)
 set(DPU_C_COMPILER dpu-upmem-dpurte-clang)

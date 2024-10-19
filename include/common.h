@@ -12,8 +12,10 @@
 
 /**
  * Request Type Specification
- * @param type_id id of request type
+ * @param type_id id of request type, should be 0, 1, ...
  * @param name name of request type
+ * @param priority priority of request, required to separate
+ *      btree inserts from btree reads.
  * @param args_struct members of args struct.
  *      If rets_size_supp != 0, the first member should be
  *      uint8_t rets_cnt.
@@ -25,23 +27,27 @@
  *      in args_struct.
  */
 #define REQUEST_TYPES_LIST(_, ...) \
-_(0, insert,                       \
+_(0, insert, 0,                    \
     uint32_t key[2];               \
     uint32_t value;                \
   , 12,                            \
     uint32_t old_value;            \
     uint32_t pad;                  \
   , 8, 0, __VA_ARGS__)             \
-_(1, get,                          \
+_(1, get, 1,                       \
     uint32_t key[2];               \
   , 8,                             \
     uint32_t value;                \
     uint32_t pad;                  \
   , 8, 0, __VA_ARGS__)
 
+#define NUM_PRIORITIES 2
+
 /* Common request definitions */
-#define DECLARE_REQUEST(type_id, name, args_struct, args_size,       \
-                        rets_struct, rets_size, rets_size_supp, ...) \
+#define DECLARE_REQUEST(type_id, name, priority, args_struct, args_size,  \
+                        rets_struct, rets_size, rets_size_supp, ...)      \
+  static_assert(0 <= priority && priority < NUM_PRIORITIES, ""); \
+                                              \
   typedef struct _args_##name##_t {           \
     args_struct                               \
   } args_##name##_t;                          \
@@ -59,35 +65,39 @@ REQUEST_TYPES_LIST(DECLARE_REQUEST)
 #undef DECLARE_REQUEST
 
 typedef enum _request_type_t {
-#define ENUM_MEMBERS(type_id, name, _1, _2, _3, _4, _5, ...) \
+#define ENUM_MEMBERS(type_id, name, ...) \
   request_type_##name = type_id,
 REQUEST_TYPES_LIST(ENUM_MEMBERS)
 #undef ENUM_MEMBERS
+request_type_priority_separator = 0xFF,
 } request_type_t;
 
 typedef union _args_any_t {
-#define ARGS_UNION_MEMBERS(_1, name, _2, _3, _4, _5, _6, ...) \
+#define ARGS_UNION_MEMBERS(_1, name, ...) \
   args_##name##_t name;
 REQUEST_TYPES_LIST(ARGS_UNION_MEMBERS)
 #undef ARGS_UNION_MEMBERS
 } args_any_t;
 
 typedef union _rets_any_t {
-#define RETS_UNION_MEMBERS(_1, name, _2, _3, _4, _5, _6, ...) \
+#define RETS_UNION_MEMBERS(_1, name, ...) \
   rets_##name##_t name;
 REQUEST_TYPES_LIST(RETS_UNION_MEMBERS)
 #undef RETS_UNION_MEMBERS
 } rets_any_t;
 
 
-#define _REQUEST_SWITCH_CASE_HELPER(_1, name, _2, _3, _4, _5, _6, user_macro) \
+#define _REQUEST_SWITCH_CASE_HELPER(_1, name, _2, _3, _4, _5, _6, _7, user_macro) \
 case request_type_##name: { \
   user_macro(name) \
 } break;
 
-#define REQUEST_SWITCH_CASE(request_type, user_macro) \
+#define REQUEST_SWITCH_CASE(request_type, user_macro, ...) \
 switch (request_type) { \
 REQUEST_TYPES_LIST(_REQUEST_SWITCH_CASE_HELPER, user_macro) \
+case request_type_priority_separator: { \
+  __VA_ARGS__ \
+} break; \
 }
 
 #endif

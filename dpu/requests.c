@@ -1,5 +1,5 @@
 #include "requests.h"
-#include "btree.c"
+#include "btree.h"
 
 static btree_t main_index;
 
