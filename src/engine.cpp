@@ -126,9 +126,11 @@ int rank_engine::init(config conf, information info) {
   // Buffers
   _buffer.alloc(_num_dpus);
   _rets_offset_counter = std::vector<uint32_t>(_num_dpus, 0);
+  _reqlists = std::vector<request*>(_num_numa_nodes * num_priorities);
 
   // Lock
   _process_lock.store(false);
+  _process_phase = 0;
 
   // Return number of dpus
   return _num_dpus;
@@ -143,72 +145,93 @@ void rank_engine::push(request *req, int core_id) {
 bool rank_engine::process() {
   bool lock_acquired = false;
   bool something_exists = false;
+  // Try acquire spinlock for this rank
   if (_process_lock.compare_exchange_strong(lock_acquired, true)) {
-    // Gather requests to this rank
-    std::vector<request*> rlists(_num_numa_nodes * num_priorities);
-    for (int priority = 0; priority < num_priorities; ++priority) {
-      for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-        rlists[priority * _num_numa_nodes + each_node] = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
-      }
-    }
+    if (_process_phase == 0) {
+      // Phase 0: Push args and launch PIM program asynchronously
+      // Then move to phase 1
 
-    // Construct buffer
-    _buffer.reset_offsets();
-    memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
-    for (int priority = 0; priority < num_priorities; ++priority) {
-      for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-        request *req = rlists[priority * _num_numa_nodes + each_node];
-        while (req) {
-          _buffer.push_args(req);
-          _rets_offset_counter[req->dpu_id] += req->rlen;
-          something_exists = true;
-          req = req->next;
+      // Gather requests to this rank
+      for (int priority = 0; priority < num_priorities; ++priority) {
+        for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+          _reqlists[priority * _num_numa_nodes + each_node] =
+            _request_lists_per_numa_node[each_node * num_priorities + priority].move();
         }
       }
-      // Insert separator
-      if (priority < num_priorities - 1) {
-        _buffer.push_priority_separator();
-      }
-    }
-    if (!something_exists) {
-      _process_lock.store(false);
-      return false;
-    }
-    uint32_t max_length = _buffer.finalize_args();
-    max_length = ALIGN8(max_length);
-    uint32_t max_rlength = 0;
-    for (uint32_t &roffset: _rets_offset_counter) {
-      max_rlength = std::max<uint32_t>(max_rlength, roffset);
-    }
-    max_rlength = ALIGN8(max_rlength);
 
-    // Copy args to rank
-    _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, max_length, true);
-
-    // Launch
-    bool succeed = _rank.launch();
-    //_rank.log_read(stdout);
-    if (!succeed) {
-      fprintf(stderr, "Rank[%d] in fault\n", _rank_id);
-      _rank.log_read(stderr, true);
-      exit(1);
-    }
-
-    // Copy rets from rank
-    _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, max_rlength, false);
-
-    // Distribute results: the traversal order should be the same as construction
-    _buffer.reset_offsets();
-    for (int priority = 0; priority < num_priorities; ++priority) {
-      for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-        request *req = rlists[priority * _num_numa_nodes + each_node];
-        while (req) {
-          _buffer.pop_rets(req);
-          req = req->next;
+      // Construct buffer
+      _buffer.reset_offsets();
+      memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
+      for (int priority = 0; priority < num_priorities; ++priority) {
+        for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+          request *req = _reqlists[priority * _num_numa_nodes + each_node];
+          while (req) {
+            _buffer.push_args(req);
+            _rets_offset_counter[req->dpu_id] += req->rlen;
+            something_exists = true;
+            req = req->next;
+          }
+        }
+        // Insert separator
+        if (priority < num_priorities - 1) {
+          _buffer.push_priority_separator();
         }
       }
-    }
 
+      // Check request exists
+      if (something_exists) {
+        uint32_t max_alength = _buffer.finalize_args();
+        max_alength = ALIGN8(max_alength);
+        uint32_t max_rlength = 0;
+        for (uint32_t &roffset: _rets_offset_counter) {
+          max_rlength = std::max<uint32_t>(max_rlength, roffset);
+        }
+        _max_rlength = ALIGN8(max_rlength);
+
+        // Copy args to rank
+        _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, max_alength, true);
+
+        // Launch
+        _rank.launch(true);
+
+        // Move to phase 1
+        _process_phase = 1;
+      }
+    }
+    else if (_process_phase == 1) {
+      // Phase 1: Check if PIM program is done
+      // If it's done, distribute return values and move to phase 0
+
+      // Check done
+      bool pim_fault = false;
+      bool pim_done = _rank.is_done(&pim_fault);
+      if (pim_fault) {
+        while (!_rank.is_done());
+        fprintf(stderr, "Rank[%d] in fault\n", _rank_id);
+        _rank.log_read(stderr, true);
+        exit(1);
+      }
+      if (pim_done) {
+        // Copy rets from rank
+        _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, _max_rlength, false);
+
+        // Distribute results: the traversal order should be the same as construction
+        _buffer.reset_offsets();
+        for (int priority = 0; priority < num_priorities; ++priority) {
+          for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+            request *req = _reqlists[priority * _num_numa_nodes + each_node];
+            while (req) {
+              _buffer.pop_rets(req);
+              req = req->next;
+            }
+          }
+        }
+
+        // Move to phase 0
+        _process_phase = 0;
+      }
+    }
+    // Release spinlock
     _process_lock.store(false);
   }
   return something_exists;
@@ -272,6 +295,11 @@ void engine::init(config conf) {
       exit(1);
     }
   }
+  /*printf("Allocated PIM ranks: ");
+  for (void *&dpu_rank: dpu_ranks) {
+    printf("%d", dpu_rank != nullptr ? 1 : 0);
+  }
+  printf("\n");*/
   // Erase nullptrs
   dpu_ranks.erase(std::remove_if(dpu_ranks.begin(), dpu_ranks.end(),
     [](const void *dpu_rank){return dpu_rank == nullptr;}), dpu_ranks.end());
@@ -297,8 +325,8 @@ void engine::init(config conf) {
     _numa_id_to_rank_ids[re.get_rank().numa_node()].push_back(each_rank);
   }
 
-  printf("Engine initialized for %d NUMA node(s) x %d PIM rank(s)\n",
-    _num_numa_nodes, _num_ranks_per_numa_node);
+  printf("Engine initialized for %d NUMA node(s) x %d PIM rank(s) (total %d DPUs)\n",
+    _num_numa_nodes, _num_ranks_per_numa_node, _num_dpus);
 }
 
 void engine::push(int pim_id, request *req, int sys_core_id) {

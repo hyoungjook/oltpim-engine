@@ -74,17 +74,29 @@ class rank_engine {
   inline upmem::rank &get_rank() {return _rank;}
 
  private:
-  int _rank_id;
-  upmem::rank _rank;
-  int _num_dpus;
-  int _num_numa_nodes;
-  static constexpr int num_priorities = NUM_PRIORITIES;
-  array<request_list> _request_lists_per_numa_node;
-  rank_buffer _buffer;
   static constexpr uint32_t dpu_args_symbol_id = 0;
   static constexpr uint32_t dpu_rets_symbol_id = 1;
+
+  int _rank_id;
+  int _num_dpus;
+  int _num_numa_nodes;
+
+  // Rank controller
+  upmem::rank _rank;
+
+  // Request list
+  static constexpr int num_priorities = NUM_PRIORITIES;
+  array<request_list> _request_lists_per_numa_node;
+
+  // PIM buffer
+  rank_buffer _buffer;
   std::vector<uint32_t> _rets_offset_counter;
+  uint32_t _max_rlength;
+  std::vector<request*> _reqlists;
+
+  // Process locks
   std::atomic<bool> _process_lock;
+  int _process_phase;
 };
 
 class engine {
