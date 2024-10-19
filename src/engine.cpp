@@ -135,7 +135,7 @@ int rank_engine::init(config conf, information info) {
 }
 
 void rank_engine::push(request *req, int core_id) {
-  int numa_node = numa_node_of_cpu(core_id);
+  int numa_node = engine::numa_node_of_core_id[core_id];
   int priority = request_type_priority[req->req_type];
   _request_lists_per_numa_node[numa_node * num_priorities + priority].push(req);
 }
@@ -214,6 +214,8 @@ bool rank_engine::process() {
   return something_exists;
 }
 
+std::vector<int> engine::numa_node_of_core_id;
+
 void engine::init(config conf) {
   // Information
   auto dpu_binary_path = std::filesystem::canonical("/proc/self/exe");
@@ -229,6 +231,15 @@ void engine::init(config conf) {
   _num_ranks = _num_ranks_per_numa_node * _num_numa_nodes;
   rank_info.num_numa_nodes = _num_numa_nodes;
 
+  // Core -> Numa shortcut
+  if (numa_node_of_core_id.empty()) {
+    int num_cores = std::thread::hardware_concurrency();
+    numa_node_of_core_id = std::vector<int>(num_cores);
+    for (int core_id = 0; core_id < num_cores; ++core_id) {
+      numa_node_of_core_id[core_id] = numa_node_of_cpu(core_id);
+    }
+  }
+
   // Allocate all physical ranks
   std::vector<void*> dpu_ranks;
   while (true) {
@@ -238,7 +249,8 @@ void engine::init(config conf) {
   }
 
   // Filter out ranks per numa node
-  int rank_count_per_numa_node[_num_numa_nodes] = {0,};
+  int rank_count_per_numa_node[_num_numa_nodes];
+  memset(&rank_count_per_numa_node, 0, sizeof(int) * _num_numa_nodes);
   for (void* &dpu_rank: dpu_ranks) {
     int numa_id = upmem::rank::numa_node_of(dpu_rank);
     if (rank_count_per_numa_node[numa_id] >= _num_ranks_per_numa_node) {
@@ -334,7 +346,7 @@ void engine::pim_id_to_rank_dpu_id(int pim_id, int &rank_id, int &dpu_id) {
 
 bool engine::process_local_numa_rank(int sys_core_id) {
   bool something_exists = false;
-  int numa_node_id = numa_node_of_cpu(sys_core_id);
+  int numa_node_id = numa_node_of_core_id[sys_core_id];
   // Get ranks of this numa node
   auto &rank_ids = _numa_id_to_rank_ids[numa_node_id];
   for (int rank_id: rank_ids) {

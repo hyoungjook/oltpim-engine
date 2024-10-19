@@ -106,6 +106,7 @@ class engine {
   inline int num_pims() {return _num_dpus;}
 
  private:
+  friend class rank_engine;
   int _num_ranks_per_numa_node;
   int _num_numa_nodes;
   int _num_ranks;
@@ -122,6 +123,9 @@ class engine {
   // Structures for numa_node_id -> [rank_id]s
   std::vector<std::vector<int>> _numa_id_to_rank_ids;
   bool process_local_numa_rank(int sys_core_id);
+
+  // Structrues for core_id -> numa_node_id
+  static std::vector<int> numa_node_of_core_id;
 
 };
 
