@@ -74,6 +74,8 @@ int main(int argc, char *argv[]) {
 
   std::vector<counter> counters = std::vector<counter>(num_cores);
   volatile bool done = false;
+  std::atomic<uint64_t> insert_key(1);
+  const uint64_t max_init_key = 16384;
 
   auto worker_fn = [&](int sys_core_id) {
     {
@@ -85,31 +87,51 @@ int main(int argc, char *argv[]) {
     }
 
     std::uniform_int_distribution<> rand_type(0, 1);
-    std::uniform_int_distribution<uint32_t> rand_arg(1, 16384);
+    std::uniform_int_distribution<uint32_t> rand_key(1, max_init_key * 5 / 4);
     uint32_t num_pims = engine.num_pims();
+    bool initialize_done = false;
     while (true) {
       oltpim::request reqs[batch_size];
       args_any_t args[batch_size];
       rets_any_t rets[batch_size];
       request_type_t types[batch_size];
       for (int i = 0; i < batch_size; ++i) {
-        types[i] = (request_type_t)rand_type(_rand_gen);
-        uint32_t rand_val = rand_arg(_rand_gen);
+        // fetch insert_key
+        uint64_t key;
+        request_type_t type;
+        if (!initialize_done) {
+          type = request_type_insert;
+          key = insert_key.fetch_add(1);
+          if (key == max_init_key + 1) {
+            printf("init done!\n");
+          }
+          if (key > max_init_key) {
+            initialize_done = true;
+          }
+        }
+        if (initialize_done) {
+          //type = (request_type_t)rand_type(_rand_gen);
+          type = request_type_get;
+          key = rand_key(_rand_gen);
+        }
+
+        types[i] = type;
         uint8_t args_size = 0, rets_size = 0;
         switch (types[i]) {
         case request_type_insert: {
-          args[i].insert.value = rand_val;
+          memcpy(args[i].insert.key, &key, sizeof(uint64_t));
+          args[i].insert.value = (uint32_t)key + 7;
           args_size = sizeof(args_insert_t);
           rets_size = sizeof(rets_insert_t);
         } break;
         case request_type_get: {
-          args[i].get.key[0] = rand_val;
+          memcpy(args[i].get.key, &key, sizeof(uint64_t));
           args_size = sizeof(args_get_t);
           rets_size = sizeof(rets_get_t);
         } break;
         }
         reqs[i] = oltpim::request(types[i], &args[i], &rets[i], args_size, rets_size);
-        engine.push(rand_val % num_pims, &reqs[i], sys_core_id);
+        engine.push(key % num_pims, &reqs[i], sys_core_id);
       }
 
       for (int i = 0; i < batch_size; ++i) {
@@ -117,18 +139,27 @@ int main(int argc, char *argv[]) {
       }
 
       for (int i = 0; i < batch_size; ++i) {
-        //printf("T[%d]: %u -> %lu\n", sys_core_id, arg, ret);
         switch (types[i]) {
         case request_type_insert: {
-          if (args[i].insert.value + 7 != rets[i].insert.old_value) {
-            fprintf(stderr, "%u + 7 != %u wrong\n", args[i].insert.value, rets[i].insert.old_value);
+          if (rets[i].insert.old_value != (uint32_t)-1) {
+            fprintf(stderr, "insert wrong\n");
             exit(1);
           }
         } break;
         case request_type_get: {
-          if (args[i].get.key[0] + 8 != rets[i].get.value) {
-            fprintf(stderr, "%u + 8 != %u wrong\n", args[i].get.key[0], rets[i].get.value);
-            exit(1);
+          uint64_t key;
+          memcpy(&key, args[i].get.key, sizeof(uint64_t));
+          if (key > max_init_key) {
+            if (rets[i].get.value != (uint32_t)-1) {
+              fprintf(stderr, "get(%lu) wrong\n", key);
+              exit(1);
+            }
+          }
+          else {
+            if (key + 7 != rets[i].get.value) {
+              fprintf(stderr, "%lu + 7 != %u wrong\n", key, rets[i].get.value);
+              exit(1);
+            }
           }
         } break;
         default:

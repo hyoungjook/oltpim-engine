@@ -33,6 +33,7 @@ int main() {
     // Initialize
     if (!initialized) {
       args_reader_cache = seqread_alloc();
+      process_init_global();
       initialized = true;
     }
 
