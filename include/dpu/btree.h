@@ -9,7 +9,7 @@
  */
 typedef void *btree_t;
 typedef uint64_t btree_key_t;
-typedef uintptr_t btree_val_t;
+typedef uint32_t btree_val_t;
 #define BTREE_NOVAL ((btree_val_t)-1)
 
 /**
