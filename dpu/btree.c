@@ -13,6 +13,8 @@
 #define MAX_DEPTH (16)
 #define DEGREE_RIGHT ((DEGREE) / 2)
 #define DEGREE_LEFT ((DEGREE) - (DEGREE_RIGHT))
+#define BTREE_ALLOCATOR_SIZE_BITS (16)
+#define BTREE_ALLOCATOR_SIZE (1UL << BTREE_ALLOCATOR_SIZE_BITS) // 64K
 
 /* Types */
 typedef uint32_t node_id_t;
@@ -37,8 +39,6 @@ typedef struct _desc_t {
 } desc_t;
 
 /* Node allocator */
-#define BTREE_ALLOCATOR_SIZE_BITS (16)
-#define BTREE_ALLOCATOR_SIZE (1UL << BTREE_ALLOCATOR_SIZE_BITS) // 64K
 static __mram_noinit node_t node_alloc_pool[BTREE_ALLOCATOR_SIZE];
 MUTEX_INIT(node_alloc_mutex);
 static node_id_t node_alloc_next;

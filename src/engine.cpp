@@ -229,6 +229,7 @@ bool rank_engine::process() {
 
         // Move to phase 0
         _process_phase = 0;
+        something_exists = true;
       }
     }
     // Release spinlock
@@ -336,13 +337,11 @@ void engine::push(int pim_id, request *req, int sys_core_id) {
   req->dpu_id = dpu_id;
   req->done = false;
   _rank_engines[rank_id].push(req, sys_core_id);
-
-  // Process this numa node's rank
-  process_local_numa_rank(sys_core_id);
 }
 
 bool engine::is_done(request *req, int sys_core_id) {
   if (req->done) return true;
+  // Process this numa node's rank
   process_local_numa_rank(sys_core_id);
   return req->done;
 }
