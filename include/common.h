@@ -11,6 +11,14 @@
 #define DPU_BUFFER_SIZE (128 * 1024)
 
 /**
+ * Status codes
+ */
+typedef uint8_t status_t;
+#define STATUS_SUCCESS  ((status_t)0)
+#define STATUS_FAILED   ((status_t)1)
+#define STATUS_CONFLICT ((status_t)2)
+
+/**
  * Request Type Specification
  * @param type_id id of request type, should be 0, 1, ...
  * @param name name of request type
@@ -26,20 +34,33 @@
  * @param rets_size_supp adds to rets_size, using second member
  *      in args_struct.
  */
-#define REQUEST_TYPES_LIST(_, ...) \
-_(0, insert, 0,                    \
-    uint32_t key[2];               \
-    uint32_t value;                \
-  , 12,                            \
-    uint32_t old_value;            \
-    uint32_t pad;                  \
-  , 8, 0, __VA_ARGS__)             \
-_(1, get, 1,                       \
-    uint32_t key[2];               \
-  , 8,                             \
-    uint32_t value;                \
-    uint32_t pad;                  \
-  , 8, 0, __VA_ARGS__)
+#define REQUEST_TYPES_LIST(_, ...)  \
+_(0, insert, 0,                     \
+    uint64_t key;                   \
+    uint64_t value;                 \
+    uint64_t xid;                   \
+    uint64_t csn;                   \
+  , 32,                             \
+    uint8_t status;                 \
+    uint8_t pad[7];                 \
+  , 8, 0, __VA_ARGS__)              \
+_(1, select, 1,                     \
+    uint64_t key;                   \
+    uint64_t xid;                   \
+    uint64_t csn;                   \
+  , 24,                             \
+    uint64_t value;                 \
+    uint8_t status;                 \
+  , 16, 0, __VA_ARGS__)             \
+_(2, update, 1,                     \
+    uint64_t key;                   \
+    uint64_t new_value;             \
+    uint64_t xid;                   \
+    uint64_t csn;                   \
+  , 32,                             \
+    uint64_t old_value;             \
+    uint8_t status;                 \
+  , 16, 0, __VA_ARGS__)             \
 
 #define NUM_PRIORITIES 2
 

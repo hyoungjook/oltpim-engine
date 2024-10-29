@@ -248,12 +248,12 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
 
   // Grab root lock; bt_desc->root lock is acquired
   depth = 0;
-  insert_retry_grab_rootp:
+  grab_rootp:
   node_id = bt_desc->root;
   lock_stack[depth] = node_lock(node_id);
   if (bt_desc->root != node_id) {
     node_unlock(lock_stack[depth]);
-    goto insert_retry_grab_rootp;
+    goto grab_rootp;
   }
 
   // Traverse down
@@ -280,7 +280,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
   // Insert to leaf
   if (!allow_duplicates && slot < node_buf.num_keys && node_buf.keys[slot] == key) {
     ret = node_buf.arr.leaf.values[slot]; // already exists
-    goto insert_end;
+    goto end;
   }
   split_node = node_id_null;
   insert_done = false;
@@ -355,7 +355,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
   }
 
   ret = BTREE_NOVAL;
-  insert_end:
+  end:
   for (int16_t d = max_depth; d >= 0; --d) {
     if (lock_stack[d] == (uint32_t)-1) break;
     node_unlock(lock_stack[d]);
