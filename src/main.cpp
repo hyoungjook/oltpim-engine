@@ -16,9 +16,30 @@ thread_local std::random_device _random_device;
 thread_local std::mt19937 _rand_gen(_random_device());
 
 struct alignas(64) counter {
-  uint64_t val = 0;
+  uint64_t commits = 0;
+  uint64_t fails = 0;
+  uint64_t conflicts = 0;
+  void operator+=(const counter& other) {
+    commits += other.commits;
+    fails += other.fails;
+    conflicts += other.conflicts;
+  }
+  counter operator-(const counter& other) {
+    return counter{
+      commits - other.commits,
+      fails - other.fails,
+      conflicts - other.conflicts
+    };
+  }
+  void increment(int status) {
+    if (status == STATUS_SUCCESS) ++commits;
+    else if (status == STATUS_FAILED) ++fails;
+    else ++conflicts;
+  }
+  uint64_t total() {
+    return commits + fails + conflicts;
+  }
 };
-
 struct coro_task {
   struct promise_type {
     coro_task get_return_object() {return {this};}
@@ -222,33 +243,53 @@ int main(int argc, char *argv[]) {
         }
       }
 
-      ++counters[sys_core_id].val;
+      ++counters[sys_core_id].commits;
     }
   };
 
   // test txn
   const int tests_per_txn = 10;
-  std::uniform_int_distribution<uint64_t> rand_key_distr(1, 2 * table_size);
+  std::uniform_int_distribution<uint64_t> rand_key_distr(1, table_size + 1);
+  std::discrete_distribution<int> txn_type_distr({9, 1}); // {read%, update%}
   auto test_txn = [&](int batch_id, int sys_core_id) -> coro_task {
     oltpim::request reqs[tests_per_txn];
     args_any_t args[tests_per_txn];
     rets_any_t rets[tests_per_txn];
 
-    // begin: read-only txn
+    // begin
     uint64_t xid = get_new_xid();
     uint64_t begin_csn = get_begin_csn();
+    std::set<int> touched_pims;
+
+    static constexpr int txn_type_read = 0;
+    //static constexpr int txn_type_update = 1;
+    int txn_type = txn_type_distr(rg);
 
     for (int i = 0; i < tests_per_txn; ++i) {
       uint64_t key = rand_key_distr(rg);
-      auto &arg = args[i].get;
-      arg.key = key;
-      arg.xid = xid;
-      arg.csn = begin_csn;
-      reqs[i] = oltpim::request(
-        request_type_get, &args[i], &rets[i],
-        sizeof(args_get_t), sizeof(rets_get_t)
-      );
+      if (txn_type == txn_type_read) {
+        auto &arg = args[i].get;
+        arg.key = key;
+        arg.xid = xid;
+        arg.csn = begin_csn;
+        reqs[i] = oltpim::request(
+          request_type_get, &args[i], &rets[i],
+          sizeof(args_get_t), sizeof(rets_get_t)
+        );
+      }
+      else {
+        auto &arg = args[i].update;
+        arg.key = key;
+        arg.xid = xid;
+        arg.csn = begin_csn;
+        arg.new_value = key + 77;
+        reqs[i] = oltpim::request(
+          request_type_update, &args[i], &rets[i],
+          sizeof(args_update_t), sizeof(rets_update_t)
+        );
+      }
       int pim_id = key_to_pim(key);
+      touched_pims.insert(pim_id);
       engine.push(pim_id, &reqs[i], sys_core_id);
     }
     for (int i = 0; i < tests_per_txn; ++i) {
@@ -256,21 +297,87 @@ int main(int argc, char *argv[]) {
         co_await std::suspend_always{};
       }
     }
+    int status = STATUS_SUCCESS;
     for (int i = 0; i < tests_per_txn; ++i) {
-      uint64_t key = args[i].get.key;
-      auto &ret = rets[i].get;
-      if (key <= (uint64_t)table_size) {
-        assert(ret.status == STATUS_SUCCESS);
-        assert(ret.value == key + 7);
+      if (txn_type == txn_type_read) {
+        uint64_t key = args[i].get.key;
+        auto &ret = rets[i].get;
+
+        // check
+        if (key <= (uint64_t)table_size) {
+          assert(ret.status != STATUS_FAILED);
+          if (ret.status == STATUS_SUCCESS) {
+            assert(ret.value == key + 7 || ret.value == key + 77);
+          }
+        }
+        else {
+          assert(ret.status != STATUS_SUCCESS);
+        }
+
+        // status
+        if (ret.status == STATUS_FAILED) {
+          status = STATUS_FAILED;
+        }
+        else if (ret.status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
+          status = STATUS_CONFLICT;
+        }
       }
       else {
-        assert(ret.status == STATUS_FAILED);
+        uint64_t key = args[i].update.key;
+        auto &ret = rets[i].update;
+
+        // check
+        if (key <= (uint64_t)table_size) {
+          assert(ret.status != STATUS_FAILED);
+          if (ret.status == STATUS_SUCCESS) {
+            assert(ret.old_value == key + 7 || ret.old_value == key + 77);
+          }
+        }
+        else {
+          assert(ret.status != STATUS_SUCCESS);
+        }
+
+        // status
+        if (ret.status == STATUS_FAILED) {
+          status = STATUS_FAILED;
+        }
+        else if (ret.status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
+          status = STATUS_CONFLICT;
+        }
       }
-      (void)ret;
     }
 
-    // no commit: read-only txn
-    ++counters[sys_core_id].val;
+    // commit/abort
+    int cnt = 0;
+    for (int pim_id: touched_pims) {
+      if (status == STATUS_SUCCESS) {
+        uint64_t end_csn = get_end_csn();
+        auto &arg = args[cnt].commit;
+        arg.xid = xid;
+        arg.csn = end_csn;
+        reqs[cnt] = oltpim::request(
+          request_type_commit, &args[cnt], &rets[cnt],
+          sizeof(args_commit_t), sizeof(rets_commit_t)
+        );
+      }
+      else {
+        auto &arg = args[cnt].abort;
+        arg.xid = xid;
+        reqs[cnt] = oltpim::request(
+          request_type_abort, &args[cnt], &rets[cnt],
+          sizeof(args_abort_t), sizeof(rets_abort_t)
+        );
+      }
+      engine.push(pim_id, &reqs[cnt], sys_core_id);
+      ++cnt;
+    }
+    for (int i = 0; i < cnt; ++i) {
+      while (!engine.is_done(&reqs[i], sys_core_id)) {
+        co_await std::suspend_always{};
+      }
+    }
+
+    counters[sys_core_id].increment(status);
   };
 
   // barrier
@@ -318,7 +425,8 @@ int main(int argc, char *argv[]) {
   auto lap_fn = [&]() {
     auto start_time = std::chrono::system_clock::now();
     auto last_time = start_time;
-    uint64_t last_counter = 0;
+    counter last_counter;
+    printf("sec:commits,fails,conflicts,CommitTPS,TotalTPS\n");
     for (int i = 0; i < seconds; ++i) {
       sleep(1);
       auto curr_time = std::chrono::system_clock::now();
@@ -327,17 +435,20 @@ int main(int argc, char *argv[]) {
       last_time = curr_time;
 
       // get counter
-      uint64_t curr_counter = 0;
+      counter curr_counter;
       for (int core_id: core_list) {
-        curr_counter += counters[core_id].val;
+        curr_counter += counters[core_id];
       }
 
       // diff
-      uint64_t sec_counter = curr_counter - last_counter;
+      counter sec_counter = curr_counter - last_counter;
       last_counter = curr_counter;
-      double tps = (double)sec_counter / real_sec;
+      double commit_tps = (double)sec_counter.commits / real_sec;
+      double total_tps = (double)sec_counter.total() / real_sec;
 
-      printf("%lf sec: %lu (%lf TPS)\n", curr_sec, sec_counter, tps);
+      printf("%lf:%lu,%lu,%lu,%lf,%lf\n", 
+        curr_sec, sec_counter.commits, sec_counter.fails, sec_counter.conflicts, 
+        commit_tps, total_tps);
     }
     done = true;
   };
