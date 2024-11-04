@@ -1,7 +1,7 @@
 #ifndef __OLTPIM_REQUESTS_H__
 #define __OLTPIM_REQUESTS_H__
 
-#include "common.h"
+#include "interface.h"
 
 void process_init_global();
 

@@ -5,7 +5,7 @@
 #include "global.hpp"
 #include "config.hpp"
 #include "upmem_rank.hpp"
-#include "common.h"
+#include "interface.h"
 
 namespace oltpim {
 

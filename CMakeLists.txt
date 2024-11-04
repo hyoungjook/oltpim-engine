@@ -47,10 +47,10 @@ execute_process(COMMAND dpu-pkg-config --libs dpu
 set(CFLAGS
   ${COMMON_CFLAGS} ${CFLAGS_DPU_CONFIG}
   -DDPU_BINARY=\"${DPU_BINARY}\"
-  -std=c++17
+  -std=c++20 -fcoroutines
 )
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g")
 #set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g3 -fno-omit-frame-pointer")
 set(LDFLAGS ${LDFLAGS_DPU_CONFIG} pthread stdc++fs)
 add_executable(${HOST_BINARY})

@@ -31,8 +31,8 @@ typedef uint8_t status_t;
  *      on CPU and DPU.
  * @param rets_struct members of rets struct.
  * @param rets_size in plain number, should be multiple of 8
- * @param rets_size_supp adds to rets_size, using second member
- *      in args_struct.
+ * @param rets_size_supp adds to rets_size, using second uint8 member
+ *      in args_struct. Use "__rn" to refer the second member.
  */
 #define REQUEST_TYPES_LIST(_, ...)  \
 _(0, insert, 0,                     \
@@ -44,7 +44,7 @@ _(0, insert, 0,                     \
     uint8_t status;                 \
     uint8_t pad[7];                 \
   , 8, 0, __VA_ARGS__)              \
-_(1, select, 1,                     \
+_(1, get, 1,                        \
     uint64_t key;                   \
     uint64_t xid;                   \
     uint64_t csn;                   \
@@ -61,6 +61,25 @@ _(2, update, 1,                     \
     uint64_t old_value;             \
     uint8_t status;                 \
   , 16, 0, __VA_ARGS__)             \
+_(3, remove, 1,                     \
+    uint64_t key;                   \
+    uint64_t xid;                   \
+    uint64_t csn;                   \
+  , 24,                             \
+    uint8_t status;                 \
+    uint8_t pad[7];                 \
+  , 8, 0, __VA_ARGS__)              \
+_(4, commit, 0,                     \
+    uint64_t xid;                   \
+    uint64_t csn;                   \
+  , 16,                             \
+    uint64_t pad;                   \
+  , 8, -8, __VA_ARGS__)             \
+_(5, abort, 0,                      \
+    uint64_t xid;                   \
+  , 8,                              \
+    uint64_t pad;                   \
+  , 8, -8, __VA_ARGS__)             \
 
 #define NUM_PRIORITIES 2
 
@@ -78,8 +97,13 @@ _(2, update, 1,                     \
     rets_struct                               \
   } rets_##name##_t;                          \
   static_assert(sizeof(rets_##name##_t) == rets_size, ""); \
-  static_assert(rets_size % 8 == 0, ""); \
-  static_assert(rets_size_supp == 0, "");
+  static_assert(rets_size % 8 == 0, "");      \
+                                              \
+  static inline uint32_t req_##name##_rets_size(args_##name##_t *args) { \
+    uint8_t __rn = *(uint8_t*)args; (void)__rn; \
+    return sizeof(rets_##name##_t) + (rets_size_supp); \
+  }                                           \
+
 // TODO rets_size_supp
 
 REQUEST_TYPES_LIST(DECLARE_REQUEST)

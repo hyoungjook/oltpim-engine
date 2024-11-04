@@ -8,7 +8,7 @@
 #include <barrier.h>
 #include <stdbool.h>
 #include <string.h>
-#include "common.h"
+#include "interface.h"
 #include "global.h"
 #include "requests.h"
 
@@ -85,7 +85,7 @@ int main() {
     #define case_get_arg_and_size(name) \
     memcpy(&arg.name, args_ptr, sizeof(args_##name##_t)); \
     request_arg_size = sizeof(args_##name##_t); \
-    request_ret_size = sizeof(rets_##name##_t);
+    request_ret_size = req_##name##_rets_size(&arg.name);
     REQUEST_SWITCH_CASE(request_type, case_get_arg_and_size,
       ++priority_frontier;
       ++args_offset;
@@ -106,7 +106,8 @@ int main() {
     process_request(request_type, &arg, &ret);
 
     // Write ret to mram buffer, assume 8B-aligned
-    mram_write(&ret, retp, request_ret_size);
+    if (request_ret_size > 0)
+      mram_write(&ret, retp, request_ret_size);
   }
 
   assert(priority_frontier == NUM_PRIORITIES - 1);

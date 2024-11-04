@@ -10,7 +10,6 @@
 typedef uint32_t oid_t;
 typedef uint32_t oid_value_t;
 #define oid_value_null ((oid_value_t)-1)
-typedef uint64_t xid_t;
 
 /**
  * Initialize the global structrues.
@@ -19,48 +18,39 @@ typedef uint64_t xid_t;
 void oid_manager_init_global();
 
 /**
- * Get an available oid and acquire with xid. Initializes value to null.
- * @return oid.
+ * Get an available oid and initialize the value.
+ * @param val value to initialize.
+ * @return allocated oid.
  */
-oid_t oid_alloc_acquire(xid_t xid);
+oid_t oid_alloc_set(oid_value_t val);
 
 /**
- * Free the oid (and implicitly release if acquired)
+ * Free the oid.
  * @param oid oid.
  */
-void oid_free_release(oid_t oid);
+void oid_free(oid_t oid);
 
 /**
- * Try acquire the oid using xid
+ * Get value of the oid.
  * @param oid oid.
- * @param xid xid.
- * @return true if succeed. false if already acquired.
+ * @return value of the oid.
  */
-bool oid_try_acquire(oid_t oid, xid_t xid);
-
-/**
- * Check if the oid is already acquired by other transaction.
- * @param oid oid.
- * @param xid xid.
- * @return true if oid acquired by other xid. false if it's 
- *  free or acquired by me.
- */
-bool oid_is_acquired_by_other(oid_t oid, xid_t xid);
-
-/**
- * Release the oid
- * @param oid oid.
- */
-void oid_release(oid_t oid);
+oid_value_t oid_get(oid_t oid);
 
 /**
  * Set value of the oid.
+ * @param oid oid.
+ * @param val value to set.
  */
 void oid_set(oid_t oid, oid_value_t val);
 
 /**
- * Get value of the oid.
+ * Set value of the oid to new_val only if its value is same as old_val.
+ * @param oid oid
+ * @param old_val old value, input and output
+ * @param new_val new value
+ * @return whether the value is exchanged
  */
-oid_value_t oid_get(oid_t oid);
+bool oid_compare_exchange(oid_t oid, oid_value_t *old_val, oid_value_t new_val);
 
 #endif

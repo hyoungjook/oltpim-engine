@@ -64,49 +64,77 @@ static inline void node_write(node_t *wram_buf, node_id_t node_id) {
 }
 
 /* Lock manager for synchronizing writers */
-#define LOCK_HASHMAP_SIZE_BITS (7)
-#define LOCK_HASHMAP_SIZE (1UL << LOCK_HASHMAP_SIZE_BITS)
-#define LOCK_HASH_MASK (LOCK_HASHMAP_SIZE - 1)
-static volatile node_id_t lock_manager_hashmap[LOCK_HASHMAP_SIZE];
+#define LOCK_HASHSET_SIZE_BITS (8)
+#define LOCK_HASHSET_SIZE (1UL << LOCK_HASHSET_SIZE_BITS)
+#define LOCK_HASH_MASK (LOCK_HASHSET_SIZE - 1)
+static volatile node_id_t lock_manager_hashset[LOCK_HASHSET_SIZE];
 MUTEX_INIT(lock_manager_mutex);
 static void lock_init_global() {
-  for (uint32_t i = 0; i < LOCK_HASHMAP_SIZE; i++) {
-    lock_manager_hashmap[i] = node_id_null;
+  for (uint32_t i = 0; i < LOCK_HASHSET_SIZE; i++) {
+    lock_manager_hashset[i] = node_id_null;
   }
 }
 
-static uint32_t node_lock(node_id_t node_id) {
-  uint32_t hash_id;
-  bool acquired;
+// robin hood hashing
+// if succeed, *hash_id is the id where value is inserted.
+// if failed, *hash_id is the id of conflicting element
+static inline bool hashset_insert_if_absent(uint32_t new_value, uint32_t *id) {
+  uint32_t hash_id = new_value & LOCK_HASH_MASK;
+  uint32_t insert_target = new_value;
   while (true) {
-    mutex_lock(lock_manager_mutex);
-    hash_id = node_id & LOCK_HASH_MASK;
-    while (true) {
-      uint32_t element = lock_manager_hashmap[hash_id];
-      if (element == node_id_null) {
-        acquired = true;
-        break;
-      }
-      if (element == node_id) {
-        acquired = false;
-        break;
-      }
-      hash_id = (hash_id + 1) & LOCK_HASH_MASK; // linear probing
+    uint32_t old_value = lock_manager_hashset[hash_id];
+    if (old_value == new_value) {
+      *id = hash_id;
+      return false; // already in the set
     }
-    if (acquired) {
-      lock_manager_hashmap[hash_id] = node_id;
-      mutex_unlock(lock_manager_mutex);
-      break;
+    if (old_value == node_id_null) {
+      if (insert_target == new_value) *id = hash_id;
+      lock_manager_hashset[hash_id] = insert_target;
+      return true; // insert succeed
     }
-    mutex_unlock(lock_manager_mutex);
-    while (lock_manager_hashmap[hash_id] == node_id);
+    if ((((insert_target & LOCK_HASH_MASK) - hash_id) & LOCK_HASH_MASK) >
+        (((old_value & LOCK_HASH_MASK) - hash_id) & LOCK_HASH_MASK)) {
+      // swap
+      if (insert_target == new_value) *id = hash_id;
+      lock_manager_hashset[hash_id] = insert_target;
+      insert_target = old_value;
+    }
+    hash_id = (hash_id + 1) & LOCK_HASH_MASK;
   }
-  return hash_id;
 }
 
-static void node_unlock(uint32_t handle) {
+static inline void hashset_delete(uint32_t value) {
+  uint32_t hash_id = value & LOCK_HASH_MASK;
+  while (lock_manager_hashset[hash_id] != value) {
+    hash_id = (hash_id + 1) & LOCK_HASH_MASK;
+  }
+  while (true) {
+    uint32_t next_hash_id = (hash_id + 1) & LOCK_HASH_MASK;
+    uint32_t next_value = lock_manager_hashset[next_hash_id];
+    if ((next_value == node_id_null) ||
+        ((next_value & LOCK_HASH_MASK) == next_hash_id)) {
+      lock_manager_hashset[hash_id] = node_id_null;
+      return;
+    }
+    lock_manager_hashset[hash_id] = next_value;
+    hash_id = next_hash_id;
+  }
+}
+
+static void node_lock(node_id_t node_id) {
+  while (true) {
+    uint32_t id;
+    mutex_lock(lock_manager_mutex);
+    bool inserted = hashset_insert_if_absent(node_id, &id);
+    mutex_unlock(lock_manager_mutex);
+    if (inserted) break;
+    while (lock_manager_hashset[id] == node_id);
+  }
+}
+
+static void node_unlock(node_id_t node_id) {
   mutex_lock(lock_manager_mutex);
-  lock_manager_hashmap[handle] = node_id_null;
+  hashset_delete(node_id);
   mutex_unlock(lock_manager_mutex);
 }
 
@@ -234,7 +262,7 @@ uint32_t btree_scan(btree_t bt, bool range, btree_key_t *key,
 btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
   node_id_t node_stack[MAX_DEPTH];
   uint16_t slot_stack[MAX_DEPTH];
-  uint32_t lock_stack[MAX_DEPTH];
+  int16_t unlocked_depth = -1;
   __dma_aligned node_t node_buf, new_node_buf;
   node_id_t node_id, new_node_id;
   uint16_t slot;
@@ -250,9 +278,9 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
   depth = 0;
   grab_rootp:
   node_id = bt_desc->root;
-  lock_stack[depth] = node_lock(node_id);
+  node_lock(node_id);
   if (bt_desc->root != node_id) {
-    node_unlock(lock_stack[depth]);
+    node_unlock(node_id);
     goto grab_rootp;
   }
 
@@ -261,18 +289,17 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
     node_stack[depth] = node_id;
     node_read(&node_buf, node_id);
     if (node_buf.num_keys < DEGREE) {
-      for (int16_t d = depth - 1; d >= 0; --d) {
-        if (lock_stack[d] == (uint32_t)-1) break;
-        node_unlock(lock_stack[d]);
-        lock_stack[d] = (uint32_t)-1;
+      for (int16_t d = depth - 1; d > unlocked_depth; --d) {
+        node_unlock(node_stack[d]);
       }
+      unlocked_depth = depth - 1;
     }
     slot = node_traverse(&node_buf, key);
     slot_stack[depth] = slot;
     if (node_buf.is_leaf) break;
     node_id = node_buf.arr.children[slot];
     ++depth;
-    lock_stack[depth] = node_lock(node_id);
+    node_lock(node_id);
   }
   const int16_t max_depth = depth;
   assert(max_depth < MAX_DEPTH);
@@ -356,9 +383,8 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
 
   ret = BTREE_NOVAL;
   end:
-  for (int16_t d = max_depth; d >= 0; --d) {
-    if (lock_stack[d] == (uint32_t)-1) break;
-    node_unlock(lock_stack[d]);
+  for (int16_t d = max_depth; d > unlocked_depth; --d) {
+    node_unlock(node_stack[d]);
   }
   return ret;
 }
