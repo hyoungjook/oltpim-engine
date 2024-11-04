@@ -35,7 +35,7 @@ add_custom_command(
 add_custom_target(build_dpu_binary ALL DEPENDS ${DPU_BINARY})
 
 # Host codes: only *.cpp
-set(HOST_BINARY oltpim)
+set(HOST_LIB oltpim)
 execute_process(COMMAND dpu-pkg-config --cflags dpu
   OUTPUT_VARIABLE CFLAGS_DPU_CONFIG
   OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -53,12 +53,12 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g")
 #set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g3 -fno-omit-frame-pointer")
 set(LDFLAGS ${LDFLAGS_DPU_CONFIG} pthread stdc++fs)
-add_executable(${HOST_BINARY})
 file(GLOB SRC_FILES src/*.cpp)
-target_sources(${HOST_BINARY} PRIVATE ${SRC_FILES})
-target_compile_options(${HOST_BINARY} PRIVATE ${CFLAGS})
+add_library(${HOST_LIB} STATIC ${SRC_FILES})
+target_compile_options(${HOST_LIB} PRIVATE ${CFLAGS})
+target_link_libraries(${HOST_LIB} PRIVATE ${LDFLAGS} numa)
 
-find_library(LIBNUMA numa REQUIRED)
-target_link_libraries(${HOST_BINARY} PRIVATE ${LDFLAGS} ${LIBNUMA})
-
-
+# Test codes
+add_executable(test_ycsb test/test_ycsb.cpp)
+target_compile_options(test_ycsb PRIVATE ${CFLAGS})
+target_link_libraries(test_ycsb PRIVATE ${HOST_LIB})
