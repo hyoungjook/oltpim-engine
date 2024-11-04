@@ -33,16 +33,23 @@ void btree_init(btree_t *bt, bool allow_duplicates);
 btree_val_t btree_get(btree_t bt, btree_key_t key);
 
 /**
+ * Scan callback.
+ * @param value value stored in the btree that matches the key range.
+ * @param args external args pointer.
+ * @return false to stop the scan immediately.
+ */
+typedef bool (*btree_scan_callback_t)(btree_val_t, void*);
+
+/**
  * Scan the index.
  * @param bt btree structure.
- * @param range if false, get all values with key[0]. (allow_duplicates = true)
- *              if true, scan (key[0], key[1]).
+ * @param keys scan (keys[0] <= keys[1]) inclusive.
  * @param max_outs max number of outputs.
  * @param out_vals output stored in this array.
  * @return number of found values.
  */
-uint32_t btree_scan(btree_t bt, bool range, btree_key_t *key,
-  uint32_t max_outs, btree_val_t *out_vals);
+void btree_scan(btree_t bt, btree_key_t *keys,
+  btree_scan_callback_t callback, void *args);
 
 /**
  * Insert the (key, value) pair.

@@ -53,7 +53,7 @@ int main() {
   __dma_aligned rets_any_t ret;
   request_type_t request_type;
   uint32_t request_arg_size = 0;
-  uint32_t request_ret_size = 0;
+  uint32_t request_ret_size = 0, request_ret_size_including_supp = 0;
   uint8_t curr_priority = 0;
   while (true) {
     __mram_ptr uint8_t *retp;
@@ -85,7 +85,8 @@ int main() {
     #define case_get_arg_and_size(name) \
     memcpy(&arg.name, args_ptr, sizeof(args_##name##_t)); \
     request_arg_size = sizeof(args_##name##_t); \
-    request_ret_size = req_##name##_rets_size(&arg.name);
+    request_ret_size = sizeof(rets_##name##_t); \
+    request_ret_size_including_supp = req_##name##_rets_size(&arg.name);
     REQUEST_SWITCH_CASE(request_type, case_get_arg_and_size,
       ++priority_frontier;
       ++args_offset;
@@ -98,16 +99,23 @@ int main() {
     args_offset += (sizeof(uint8_t) + request_arg_size);
     args_ptr = seqread_get(args_ptr, request_arg_size, &args_reader);
     retp = rets_ptr;
-    rets_ptr += request_ret_size;
+    rets_ptr += request_ret_size_including_supp;
     // Mutex block end
     mutex_unlock(args_mutex);
 
     // Process request
-    process_request(request_type, &arg, &ret);
+    process_request(request_type, &arg, &ret, retp);
 
     // Write ret to mram buffer, assume 8B-aligned
-    if (request_ret_size > 0)
+    // Here, we only copy the fixed-size part (request_ret_size).
+    // If request_ret_size_including_supp > request_ret_size, the supplementary
+    // part is copied within process_request() function.
+    // One exception: if request_ret_size_including_supp == 0, that means
+    // there's no return value and copying is not required at all.
+    if (request_ret_size_including_supp > 0) {
       mram_write(&ret, retp, request_ret_size);
+    }
+
   }
 
   assert(priority_frontier == NUM_PRIORITIES - 1);

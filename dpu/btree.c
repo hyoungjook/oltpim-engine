@@ -205,49 +205,49 @@ btree_val_t btree_get(btree_t bt, btree_key_t key) {
     node_buf.arr.leaf.values[slot] : BTREE_NOVAL;
 }
 
-uint32_t btree_scan(btree_t bt, bool range, btree_key_t *key,
-    uint32_t max_outs, btree_val_t *out_vals) {
+void btree_scan(btree_t bt, btree_key_t *keys,
+    btree_scan_callback_t callback, void *args) {
+  const bool range_scan = (keys[0] != keys[1]);
   __dma_aligned node_t node_buf;
   node_id_t node_id;
   uint16_t slot;
-  uint32_t num_outs;
 
   // Traverse
   node_id = ((desc_t*)bt)->root;
   while (true) {
     node_read(&node_buf, node_id);
-    slot = node_traverse(&node_buf, key[0]);
+    slot = node_traverse(&node_buf, keys[0]);
     if (node_buf.is_leaf) break;
     node_id = node_buf.arr.children[slot];
   }
 
   // Edge case
-  if (range && !(slot < DEGREE)) {
+  if (range_scan && !(slot < DEGREE)) {
     node_id = node_buf.arr.leaf.next;
     node_read(&node_buf, node_id);
-    slot = node_traverse(&node_buf, key[0]);
+    slot = node_traverse(&node_buf, keys[0]);
   }
 
   // No value found
   if (!(slot < DEGREE) ||
         // range: no key in (key[0], key[1])
-      (range ? (node_buf.keys[slot] > key[1])
+      (range_scan ? (node_buf.keys[slot] > keys[1])
         // !range: no key matches key[0]
-      : (node_buf.keys[slot] != key[0]))
+      : (node_buf.keys[slot] != keys[0]))
       ) {
-    return 0;
+    return;
   }
 
   // At least one value found
-  num_outs = 0;
   while (true) {
-    if (num_outs >= max_outs) break;
-    if (range ? (node_buf.keys[slot] > key[1])
-        : (node_buf.keys[slot] != key[0])
+    // key end condition
+    if (range_scan ? (node_buf.keys[slot] > keys[1])
+        : (node_buf.keys[slot] != keys[0])
         )
       break;
-    out_vals[num_outs] = node_buf.arr.leaf.values[slot];
-    ++num_outs;
+    // call callback
+    if (!callback(node_buf.arr.leaf.values[slot], args))
+      break;
     ++slot;
     if (slot >= DEGREE) {
       node_id = node_buf.arr.leaf.next;
@@ -256,7 +256,6 @@ uint32_t btree_scan(btree_t bt, bool range, btree_key_t *key,
       node_read(&node_buf, node_id);
     }
   }
-  return num_outs;
 }
 
 btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {

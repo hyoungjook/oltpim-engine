@@ -83,13 +83,26 @@ _(3, remove, 1,                     \
     uint8_t status;                 \
     uint8_t pad[7];                 \
   , 8, 0, __VA_ARGS__)              \
-_(4, commit, 0,                     \
+_(4, scan, 1,                       \
+    uint8_t max_outs;               \
+    uint8_t index_id;               \
+    uint8_t pad[6];                 \
+    uint64_t keys[2];               \
+    uint64_t xid;                   \
+    uint64_t csn;                   \
+  , 40,                             \
+    uint8_t status;                 \
+    uint8_t outs;                   \
+    uint8_t pad[6];                 \
+    uint64_t values[0];             \
+  , 8, 8 * (__rn), __VA_ARGS__)     \
+_(5, commit, 0,                     \
     uint64_t xid;                   \
     uint64_t csn;                   \
   , 16,                             \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(5, abort, 0,                      \
+_(6, abort, 0,                      \
     uint64_t xid;                   \
   , 8,                              \
     uint64_t pad;                   \
@@ -117,8 +130,6 @@ _(5, abort, 0,                      \
     uint8_t __rn = *(uint8_t*)args; (void)__rn; \
     return sizeof(rets_##name##_t) + (rets_size_supp); \
   }                                           \
-
-// TODO rets_size_supp
 
 REQUEST_TYPES_LIST(DECLARE_REQUEST)
 #undef DECLARE_REQUEST

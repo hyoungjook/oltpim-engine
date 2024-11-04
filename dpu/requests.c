@@ -25,15 +25,16 @@ void process_init_global() {
 }
 
 #define DECLARE_REQUEST_FUNC(_1, name, _2, _3, _4, _5, _6, ...) \
-static inline void process_##name(args_##name##_t *args, rets_##name##_t *rets);
+static inline void process_##name(args_##name##_t *args, rets_##name##_t *rets, __mram_ptr uint8_t *mrets);
 
 REQUEST_TYPES_LIST(DECLARE_REQUEST_FUNC)
 
 #undef DECLARE_REQUEST_FUNC
 
-void process_request(request_type_t request_type, args_any_t *args, rets_any_t *rets) {
+void process_request(request_type_t request_type, args_any_t *args, rets_any_t *rets,
+    __mram_ptr uint8_t *mrets) {
   #define case_process_request(name) \
-  process_##name(&args->name, &rets->name);
+  process_##name(&args->name, &rets->name, mrets);
 
   REQUEST_SWITCH_CASE(request_type, case_process_request)
 
@@ -42,7 +43,7 @@ void process_request(request_type_t request_type, args_any_t *args, rets_any_t *
 
 static_assert(sizeof(btree_val_t) == sizeof(oid_t), "");
 
-static inline void process_insert(args_insert_t *args, rets_insert_t *rets) {
+static inline void process_insert(args_insert_t *args, rets_insert_t *rets, __mram_ptr uint8_t *_) {
   assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = true; // default, if btree_insert succeeds
@@ -75,7 +76,7 @@ static inline void process_insert(args_insert_t *args, rets_insert_t *rets) {
   rets->status = status;
 }
 
-static inline void process_get(args_get_t *args, rets_get_t *rets) {
+static inline void process_get(args_get_t *args, rets_get_t *rets, __mram_ptr uint8_t *_) {
   assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   // query btree
@@ -87,7 +88,7 @@ static inline void process_get(args_get_t *args, rets_get_t *rets) {
   rets->status = status;
 }
 
-static inline void process_update(args_update_t *args, rets_update_t *rets) {
+static inline void process_update(args_update_t *args, rets_update_t *rets, __mram_ptr uint8_t *_) {
   assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
@@ -104,7 +105,7 @@ static inline void process_update(args_update_t *args, rets_update_t *rets) {
   rets->status = status;
 }
 
-static inline void process_remove(args_remove_t *args, rets_remove_t *rets) {
+static inline void process_remove(args_remove_t *args, rets_remove_t *rets, __mram_ptr uint8_t *_) {
   assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
@@ -120,6 +121,45 @@ static inline void process_remove(args_remove_t *args, rets_remove_t *rets) {
   rets->status = status;
 }
 
+typedef struct _scan_callback_args {
+  uint64_t xid, csn;        // input, xid and csn
+  __mram_ptr uint64_t *output_array;   // output, store values here
+  uint8_t max_outs;         // input, max number of outputs
+  uint8_t outs;             // output, number of found values
+  uint8_t status;           // output, status
+} scan_callback_args;
+static bool scan_callback(oid_t oid, void *args) {
+  scan_callback_args *a = (scan_callback_args*)args;
+  __dma_aligned uint64_t value;
+  if (object_read(oid, a->xid, a->csn, &value)) {
+    // succeed
+    mram_write(&value, &a->output_array[a->outs], sizeof(uint64_t));
+    a->status = STATUS_SUCCESS;
+    ++(a->outs);
+    if (a->outs >= a->max_outs) return false; // end of scan
+  }
+  else {
+    // invisible: skip to next item
+  }
+  return true;
+}
+
+static inline void process_scan(args_scan_t *args, rets_scan_t *rets, __mram_ptr uint8_t *mrets) {
+  assert(args->index_id < NUM_INDEXES);
+  assert(args->keys[0] <= args->keys[1]);
+  scan_callback_args scan_args;
+  scan_args.xid = args->xid;
+  scan_args.csn = args->csn;
+  scan_args.output_array = (__mram_ptr uint64_t*)(mrets + sizeof(rets_scan_t));
+  scan_args.max_outs = args->max_outs;
+  scan_args.outs = 0;
+  scan_args.status = STATUS_FAILED;
+  // query btree
+  btree_scan(index_trees[args->index_id], (uint64_t*)&args->keys, scan_callback, &scan_args);
+  rets->status = scan_args.status;
+  rets->outs = scan_args.outs;
+}
+
 typedef struct _finalize_arg {
   xid_t xid;
   csn_t csn;
@@ -130,7 +170,7 @@ static void finalize_callback(oid_t oid, void *arg) {
   object_finalize(oid, a->xid, a->csn, a->commit);
 }
 
-static inline void process_commit(args_commit_t *args, rets_commit_t *rets) {
+static inline void process_commit(args_commit_t *args, rets_commit_t *rets, __mram_ptr uint8_t *_) {
   finalize_arg arg;
   arg.xid = args->xid;
   arg.csn = args->csn;
@@ -138,7 +178,7 @@ static inline void process_commit(args_commit_t *args, rets_commit_t *rets) {
   wset_traverse_remove(args->xid, finalize_callback, &arg);
 }
 
-static inline void process_abort(args_abort_t *args, rets_abort_t *rets) {
+static inline void process_abort(args_abort_t *args, rets_abort_t *rets, __mram_ptr uint8_t *_) {
   finalize_arg arg;
   arg.xid = args->xid;
   // csn not used

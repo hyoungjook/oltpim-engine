@@ -172,7 +172,8 @@ int main(int argc, char *argv[]) {
   std::vector<counter> counters = std::vector<counter>(num_cores);
   volatile bool done = false;
   const uint64_t num_pims = engine.num_pims();
-  auto key_to_pim = [&](uint64_t key) {return key % num_pims;};
+  const uint64_t scan_length = 8;
+  auto key_to_pim = [&](uint64_t key) -> int {return (key / 8) % num_pims;};
   std::atomic<uint64_t> g_xid(1), g_csn(1);
   auto get_new_xid = [&]() {return g_xid.fetch_add(1);};
   auto get_begin_csn = [&]() {return g_csn.load();};
@@ -253,136 +254,190 @@ int main(int argc, char *argv[]) {
   // test txn
   const int tests_per_txn = 10;
   std::uniform_int_distribution<uint64_t> rand_key_distr(1, table_size + 1);
-  std::discrete_distribution<int> txn_type_distr({9, 1}); // {read%, update%}
+  std::discrete_distribution<int> txn_type_distr({8, 1, 1}); // {read%, update%, scan%}
   auto test_txn = [&](int batch_id, int sys_core_id) -> coro_task {
-    oltpim::request reqs[tests_per_txn];
-    args_any_t args[tests_per_txn];
-    rets_any_t rets[tests_per_txn];
-
-    // begin
-    uint64_t xid = get_new_xid();
-    uint64_t begin_csn = get_begin_csn();
-    std::set<int> touched_pims;
-
     static constexpr int txn_type_read = 0;
-    //static constexpr int txn_type_update = 1;
+    static constexpr int txn_type_update = 1;
+    static constexpr int txn_type_scan = 2;
     int txn_type = txn_type_distr(rg);
-
-    for (int i = 0; i < tests_per_txn; ++i) {
+    
+    if (txn_type == txn_type_scan) {
       uint64_t key = rand_key_distr(rg);
-      if (txn_type == txn_type_read) {
-        auto &arg = args[i].get;
-        arg.key = key;
-        arg.xid = xid;
-        arg.csn = begin_csn;
-        arg.index_id = 0;
-        reqs[i] = oltpim::request(
-          request_type_get, &args[i], &rets[i],
-          sizeof(args_get_t), sizeof(rets_get_t)
-        );
-      }
-      else {
-        auto &arg = args[i].update;
-        arg.key = key;
-        arg.xid = xid;
-        arg.csn = begin_csn;
-        arg.new_value = key + 77;
-        arg.index_id = 0;
-        reqs[i] = oltpim::request(
-          request_type_update, &args[i], &rets[i],
-          sizeof(args_update_t), sizeof(rets_update_t)
-        );
-      }
-      int pim_id = key_to_pim(key);
-      touched_pims.insert(pim_id);
-      engine.push(pim_id, &reqs[i], sys_core_id);
-    }
-    for (int i = 0; i < tests_per_txn; ++i) {
-      while (!engine.is_done(&reqs[i], sys_core_id)) {
+      uint64_t xid = get_new_xid();
+      uint64_t begin_csn = get_begin_csn();
+
+      oltpim::request req;
+      args_scan_t args;
+      args.max_outs = scan_length;
+      args.index_id = 0;
+      args.keys[0] = (key / scan_length) * scan_length;
+      args.keys[1] = args.keys[0] + scan_length - 1;
+      args.xid = xid;
+      args.csn = begin_csn;
+      uint32_t rlen = req_scan_rets_size(&args);
+      uint8_t rets_buf[256];
+      assert(rlen <= 256);
+      rets_scan_t *rets = (rets_scan_t*)&rets_buf;
+      req = oltpim::request(
+        request_type_scan, &args, rets,
+        sizeof(args_scan_t), rlen
+      );
+      int pim_id = key_to_pim(args.keys[0]);
+      assert(key_to_pim(args.keys[1]) == pim_id);
+      engine.push(pim_id, &req, sys_core_id);
+      while (!engine.is_done(&req, sys_core_id)) {
         co_await std::suspend_always{};
       }
-    }
-    int status = STATUS_SUCCESS;
-    for (int i = 0; i < tests_per_txn; ++i) {
-      if (txn_type == txn_type_read) {
-        uint64_t key = args[i].get.key;
-        auto &ret = rets[i].get;
 
-        // check
-        if (key <= (uint64_t)table_size) {
-          assert(ret.status != STATUS_FAILED);
-          if (ret.status == STATUS_SUCCESS) {
-            assert(ret.value == key + 7 || ret.value == key + 77);
+      int status = rets->status;
+      int expected_outs = 0;
+      for (uint64_t key = args.keys[0]; key <= args.keys[1]; ++key) {
+        if (1 <= key && key <= (uint64_t)table_size) {
+          if (status == STATUS_SUCCESS) {
+            uint64_t value = rets->values[expected_outs];
+            assert(value == key + 7 || value == key + 77);
+            (void)value;
           }
+          ++expected_outs;
         }
-        else {
-          assert(ret.status != STATUS_SUCCESS);
-        }
-
-        // status
-        if (ret.status == STATUS_FAILED) {
-          status = STATUS_FAILED;
-        }
-        else if (ret.status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
-          status = STATUS_CONFLICT;
-        }
+      }
+      assert(expected_outs == rets->outs);
+      if (expected_outs == 0) {
+        assert(status == STATUS_FAILED);
       }
       else {
-        uint64_t key = args[i].update.key;
-        auto &ret = rets[i].update;
+        assert(status == STATUS_SUCCESS);
+      }
 
-        // check
-        if (key <= (uint64_t)table_size) {
-          assert(ret.status != STATUS_FAILED);
-          if (ret.status == STATUS_SUCCESS) {
-            assert(ret.old_value == key + 7 || ret.old_value == key + 77);
+      // read-only; skip commit
+      counters[sys_core_id].increment(status);
+    }
+    else {
+      oltpim::request reqs[tests_per_txn];
+      args_any_t args[tests_per_txn];
+      rets_any_t rets[tests_per_txn];
+
+      // begin
+      uint64_t xid = get_new_xid();
+      uint64_t begin_csn = get_begin_csn();
+      std::set<int> touched_pims;
+
+      for (int i = 0; i < tests_per_txn; ++i) {
+        uint64_t key = rand_key_distr(rg);
+        if (txn_type == txn_type_read) {
+          auto &arg = args[i].get;
+          arg.key = key;
+          arg.xid = xid;
+          arg.csn = begin_csn;
+          arg.index_id = 0;
+          reqs[i] = oltpim::request(
+            request_type_get, &args[i], &rets[i],
+            sizeof(args_get_t), sizeof(rets_get_t)
+          );
+        }
+        else if (txn_type == txn_type_update) {
+          auto &arg = args[i].update;
+          arg.key = key;
+          arg.xid = xid;
+          arg.csn = begin_csn;
+          arg.new_value = key + 77;
+          arg.index_id = 0;
+          reqs[i] = oltpim::request(
+            request_type_update, &args[i], &rets[i],
+            sizeof(args_update_t), sizeof(rets_update_t)
+          );
+        }
+        int pim_id = key_to_pim(key);
+        touched_pims.insert(pim_id);
+        engine.push(pim_id, &reqs[i], sys_core_id);
+      }
+      for (int i = 0; i < tests_per_txn; ++i) {
+        while (!engine.is_done(&reqs[i], sys_core_id)) {
+          co_await std::suspend_always{};
+        }
+      }
+      int status = STATUS_SUCCESS;
+      for (int i = 0; i < tests_per_txn; ++i) {
+        if (txn_type == txn_type_read) {
+          uint64_t key = args[i].get.key;
+          auto &ret = rets[i].get;
+
+          // check
+          if (key <= (uint64_t)table_size) {
+            assert(ret.status != STATUS_FAILED);
+            if (ret.status == STATUS_SUCCESS) {
+              assert(ret.value == key + 7 || ret.value == key + 77);
+            }
+          }
+          else {
+            assert(ret.status != STATUS_SUCCESS);
+          }
+
+          // status
+          if (ret.status == STATUS_FAILED) {
+            status = STATUS_FAILED;
+          }
+          else if (ret.status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
+            status = STATUS_CONFLICT;
           }
         }
+        else if (txn_type == txn_type_update) {
+          uint64_t key = args[i].update.key;
+          auto &ret = rets[i].update;
+
+          // check
+          if (key <= (uint64_t)table_size) {
+            assert(ret.status != STATUS_FAILED);
+            if (ret.status == STATUS_SUCCESS) {
+              assert(ret.old_value == key + 7 || ret.old_value == key + 77);
+            }
+          }
+          else {
+            assert(ret.status != STATUS_SUCCESS);
+          }
+
+          // status
+          if (ret.status == STATUS_FAILED) {
+            status = STATUS_FAILED;
+          }
+          else if (ret.status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
+            status = STATUS_CONFLICT;
+          }
+        }
+      }
+
+      // commit/abort
+      int cnt = 0;
+      for (int pim_id: touched_pims) {
+        if (status == STATUS_SUCCESS) {
+          uint64_t end_csn = get_end_csn();
+          auto &arg = args[cnt].commit;
+          arg.xid = xid;
+          arg.csn = end_csn;
+          reqs[cnt] = oltpim::request(
+            request_type_commit, &args[cnt], &rets[cnt],
+            sizeof(args_commit_t), sizeof(rets_commit_t)
+          );
+        }
         else {
-          assert(ret.status != STATUS_SUCCESS);
+          auto &arg = args[cnt].abort;
+          arg.xid = xid;
+          reqs[cnt] = oltpim::request(
+            request_type_abort, &args[cnt], &rets[cnt],
+            sizeof(args_abort_t), sizeof(rets_abort_t)
+          );
         }
-
-        // status
-        if (ret.status == STATUS_FAILED) {
-          status = STATUS_FAILED;
+        engine.push(pim_id, &reqs[cnt], sys_core_id);
+        ++cnt;
+      }
+      for (int i = 0; i < cnt; ++i) {
+        while (!engine.is_done(&reqs[i], sys_core_id)) {
+          co_await std::suspend_always{};
         }
-        else if (ret.status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
-          status = STATUS_CONFLICT;
-        }
       }
-    }
 
-    // commit/abort
-    int cnt = 0;
-    for (int pim_id: touched_pims) {
-      if (status == STATUS_SUCCESS) {
-        uint64_t end_csn = get_end_csn();
-        auto &arg = args[cnt].commit;
-        arg.xid = xid;
-        arg.csn = end_csn;
-        reqs[cnt] = oltpim::request(
-          request_type_commit, &args[cnt], &rets[cnt],
-          sizeof(args_commit_t), sizeof(rets_commit_t)
-        );
-      }
-      else {
-        auto &arg = args[cnt].abort;
-        arg.xid = xid;
-        reqs[cnt] = oltpim::request(
-          request_type_abort, &args[cnt], &rets[cnt],
-          sizeof(args_abort_t), sizeof(rets_abort_t)
-        );
-      }
-      engine.push(pim_id, &reqs[cnt], sys_core_id);
-      ++cnt;
+      counters[sys_core_id].increment(status);
     }
-    for (int i = 0; i < cnt; ++i) {
-      while (!engine.is_done(&reqs[i], sys_core_id)) {
-        co_await std::suspend_always{};
-      }
-    }
-
-    counters[sys_core_id].increment(status);
   };
 
   // barrier
