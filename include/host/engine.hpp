@@ -55,12 +55,15 @@ class rank_engine {
  public:
   struct config { // user-specified config
     void *dpu_rank;
+    uint32_t num_indexes;
+    index_info index_infos[DPU_MAX_NUM_INDEXES];
   };
   struct information { // info passed from parent engine
     int rank_id;
     int num_numa_nodes;
     const char *dpu_binary;
     const char *dpu_args_symbol, *dpu_rets_symbol;
+    const char *dpu_num_indexes_symbol, *dpu_index_infos_symbol;
   };
   rank_engine() {}
   int init(config conf, information info);
@@ -103,6 +106,8 @@ class engine {
  public:
   struct config {
     int num_ranks_per_numa_node;
+    uint32_t num_indexes;
+    index_info index_infos[DPU_MAX_NUM_INDEXES];
   };
 
   engine() {}

@@ -2,6 +2,7 @@
 #define __OLTPIM_COMMON_H__
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <assert.h>
 
 // args and rets
@@ -9,6 +10,15 @@
 #define DPU_RETS_SYMBOL global_rets_buf_interface_
 
 #define DPU_BUFFER_SIZE (128 * 1024)
+
+// index initialization
+#define DPU_MAX_NUM_INDEXES (32)
+#define DPU_NUM_INDEXES_SYMBOL global_num_indexes_
+#define DPU_INDEX_INFOS_SYMBOL global_index_infos_
+typedef struct _index_info {
+  bool primary;
+} index_info;
+static_assert((sizeof(index_info) * DPU_MAX_NUM_INDEXES) % 8 == 0, "");
 
 /**
  * Status codes
@@ -40,7 +50,8 @@ _(0, insert, 0,                     \
     uint64_t value;                 \
     uint64_t xid;                   \
     uint64_t csn;                   \
-  , 32,                             \
+    uint8_t index_id;               \
+  , 40,                             \
     uint8_t status;                 \
     uint8_t pad[7];                 \
   , 8, 0, __VA_ARGS__)              \
@@ -48,7 +59,8 @@ _(1, get, 1,                        \
     uint64_t key;                   \
     uint64_t xid;                   \
     uint64_t csn;                   \
-  , 24,                             \
+    uint8_t index_id;               \
+  , 32,                             \
     uint64_t value;                 \
     uint8_t status;                 \
   , 16, 0, __VA_ARGS__)             \
@@ -57,7 +69,8 @@ _(2, update, 1,                     \
     uint64_t new_value;             \
     uint64_t xid;                   \
     uint64_t csn;                   \
-  , 32,                             \
+    uint8_t index_id;               \
+  , 40,                             \
     uint64_t old_value;             \
     uint8_t status;                 \
   , 16, 0, __VA_ARGS__)             \
@@ -65,7 +78,8 @@ _(3, remove, 1,                     \
     uint64_t key;                   \
     uint64_t xid;                   \
     uint64_t csn;                   \
-  , 24,                             \
+    uint8_t index_id;               \
+  , 32,                             \
     uint8_t status;                 \
     uint8_t pad[7];                 \
   , 8, 0, __VA_ARGS__)              \

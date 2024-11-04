@@ -119,6 +119,15 @@ int rank_engine::init(config conf, information info) {
   }
   _num_dpus = _rank.num_dpus();
 
+  // Initialize index info
+  {
+    uint32_t num_indexes_symbol_id = _rank.register_dpu_symbol(info.dpu_num_indexes_symbol);
+    uint32_t index_infos_symbol_id = _rank.register_dpu_symbol(info.dpu_index_infos_symbol);
+    uint64_t num_indexes_buf = conf.num_indexes;
+    _rank.broadcast(num_indexes_symbol_id, &num_indexes_buf, sizeof(uint64_t));
+    _rank.broadcast(index_infos_symbol_id, &conf.index_infos, sizeof(index_info) * DPU_MAX_NUM_INDEXES);
+  }
+
   // Request list
   _num_numa_nodes = info.num_numa_nodes;
   _request_lists_per_numa_node.alloc(_num_numa_nodes * num_priorities);
@@ -248,6 +257,8 @@ void engine::init(config conf) {
   rank_info.dpu_binary = dpu_binary_path.c_str();
   rank_info.dpu_args_symbol = TOSTRING(DPU_ARGS_SYMBOL);
   rank_info.dpu_rets_symbol = TOSTRING(DPU_RETS_SYMBOL);
+  rank_info.dpu_num_indexes_symbol = TOSTRING(DPU_NUM_INDEXES_SYMBOL);
+  rank_info.dpu_index_infos_symbol = TOSTRING(DPU_INDEX_INFOS_SYMBOL);
 
   OLTPIM_ASSERT(numa_available() >= 0);
   _num_numa_nodes = numa_max_node() + 1;
@@ -315,6 +326,8 @@ void engine::init(config conf) {
   for (int each_rank = 0; each_rank < _num_ranks; ++each_rank) {
     rank_engine::config rank_config;
     rank_config.dpu_rank = dpu_ranks[each_rank];
+    rank_config.num_indexes = conf.num_indexes;
+    memcpy(&rank_config.index_infos, &conf.index_infos, sizeof(index_info) * DPU_MAX_NUM_INDEXES);
     auto &re = _rank_engines[each_rank];
     rank_info.rank_id = each_rank;
     int num_dpus_this_rank = re.init(

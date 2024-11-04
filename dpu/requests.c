@@ -1,15 +1,25 @@
 #include <stddef.h>
+#include <attributes.h>
 #include "interface.h"
 #include "requests.h"
 #include "btree.h"
 #include "object.h"
 #include "wset.h"
 
-static btree_t main_index;
+#define NUM_INDEXES DPU_NUM_INDEXES_SYMBOL
+#define INDEX_INFOS DPU_INDEX_INFOS_SYMBOL
+
+__host uint64_t NUM_INDEXES;
+__host index_info INDEX_INFOS[DPU_MAX_NUM_INDEXES];
+static btree_t index_trees[DPU_MAX_NUM_INDEXES];
 
 void process_init_global() {
   btree_init_global();
-  btree_init(&main_index, false);
+  for (uint32_t index_id = 0; index_id < NUM_INDEXES; ++index_id) {
+    // Unique map for primary index, Multi map for secondary index
+    const bool allow_duplicates = !INDEX_INFOS[index_id].primary;
+    btree_init(&index_trees[index_id], allow_duplicates);
+  }
   object_init_global();
   wset_init_global();
 }
@@ -33,12 +43,13 @@ void process_request(request_type_t request_type, args_any_t *args, rets_any_t *
 static_assert(sizeof(btree_val_t) == sizeof(oid_t), "");
 
 static inline void process_insert(args_insert_t *args, rets_insert_t *rets) {
+  assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = true; // default, if btree_insert succeeds
   // Allocate object
   oid_t oid = object_create_acquire(args->xid, args->value);
   // Try insert to btree
-  btree_val_t old_oid = btree_insert(main_index, args->key, oid);
+  btree_val_t old_oid = btree_insert(index_trees[args->index_id], args->key, oid);
   if (old_oid != BTREE_NOVAL) {
     // key already exists
     object_cancel_create(oid);
@@ -65,9 +76,10 @@ static inline void process_insert(args_insert_t *args, rets_insert_t *rets) {
 }
 
 static inline void process_get(args_get_t *args, rets_get_t *rets) {
+  assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   // query btree
-  oid_t oid = btree_get(main_index, args->key);
+  oid_t oid = btree_get(index_trees[args->index_id], args->key);
   if (oid != BTREE_NOVAL && object_read(oid, args->xid, args->csn, &rets->value)) {
     status = STATUS_SUCCESS;
   }
@@ -76,10 +88,11 @@ static inline void process_get(args_get_t *args, rets_get_t *rets) {
 }
 
 static inline void process_update(args_update_t *args, rets_update_t *rets) {
+  assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
-  oid_t oid = btree_get(main_index, args->key);
+  oid_t oid = btree_get(index_trees[args->index_id], args->key);
   if (oid != BTREE_NOVAL) {
     status = object_update(oid, args->xid, args->csn, args->new_value,
       &rets->old_value, false, &add_to_write_set);
@@ -92,10 +105,11 @@ static inline void process_update(args_update_t *args, rets_update_t *rets) {
 }
 
 static inline void process_remove(args_remove_t *args, rets_remove_t *rets) {
+  assert(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
-  oid_t oid = btree_get(main_index, args->key);
+  oid_t oid = btree_get(index_trees[args->index_id], args->key);
   if (oid != BTREE_NOVAL) {
     status = object_update(oid, args->xid, args->csn, 0, NULL, true, &add_to_write_set);
   }

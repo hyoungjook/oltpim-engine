@@ -141,6 +141,8 @@ int main(int argc, char *argv[]) {
   // Initialize engine
   oltpim::engine::config engine_config;
   engine_config.num_ranks_per_numa_node = num_ranks_per_numa_node;
+  engine_config.num_indexes = 1;
+  engine_config.index_infos[0].primary = true;
   oltpim::engine engine;
   engine.init(engine_config);
 
@@ -203,6 +205,7 @@ int main(int argc, char *argv[]) {
         arg.value = key + 7;
         arg.xid = xid;
         arg.csn = begin_csn;
+        arg.index_id = 0;
         reqs[k] = oltpim::request(
           request_type_insert, &args[k], &rets[k], 
           sizeof(args_insert_t), sizeof(rets_insert_t)
@@ -272,6 +275,7 @@ int main(int argc, char *argv[]) {
         arg.key = key;
         arg.xid = xid;
         arg.csn = begin_csn;
+        arg.index_id = 0;
         reqs[i] = oltpim::request(
           request_type_get, &args[i], &rets[i],
           sizeof(args_get_t), sizeof(rets_get_t)
@@ -283,6 +287,7 @@ int main(int argc, char *argv[]) {
         arg.xid = xid;
         arg.csn = begin_csn;
         arg.new_value = key + 77;
+        arg.index_id = 0;
         reqs[i] = oltpim::request(
           request_type_update, &args[i], &rets[i],
           sizeof(args_update_t), sizeof(rets_update_t)
