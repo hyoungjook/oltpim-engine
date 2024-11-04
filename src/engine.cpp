@@ -247,9 +247,15 @@ bool rank_engine::process() {
   return something_exists;
 }
 
+engine engine::g_engine;
 std::vector<int> engine::numa_node_of_core_id;
 
+engine::engine(): _initialized(false) {}
+
 void engine::init(config conf) {
+  assert(!_initialized);
+  _initialized = true;
+
   // Information
   auto dpu_binary_path = std::filesystem::canonical("/proc/self/exe");
   dpu_binary_path = dpu_binary_path.parent_path().append(DPU_BINARY);
@@ -344,6 +350,7 @@ void engine::init(config conf) {
 }
 
 void engine::push(int pim_id, request *req, int sys_core_id) {
+  assert(_initialized);
   // Push to the rank engine
   int rank_id = 0, dpu_id = 0;
   pim_id_to_rank_dpu_id(pim_id, rank_id, dpu_id);
@@ -353,6 +360,7 @@ void engine::push(int pim_id, request *req, int sys_core_id) {
 }
 
 bool engine::is_done(request *req, int sys_core_id) {
+  assert(_initialized);
   if (req->done) return true;
   // Process this numa node's rank
   process_local_numa_rank(sys_core_id);
@@ -360,6 +368,7 @@ bool engine::is_done(request *req, int sys_core_id) {
 }
 
 void engine::drain_all(int sys_core_id) {
+  assert(_initialized);
   while (true) {
     bool something_exists = process_local_numa_rank(sys_core_id);
     if (!something_exists) {

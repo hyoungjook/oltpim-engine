@@ -104,13 +104,13 @@ class rank_engine {
 
 class engine {
  public:
+  static engine g_engine;
+
   struct config {
     int num_ranks_per_numa_node;
     uint32_t num_indexes;
     index_info index_infos[DPU_MAX_NUM_INDEXES];
   };
-
-  engine() {}
   void init(config conf);
 
   // push() and is_done() internally processes caller's numa node's
@@ -123,6 +123,9 @@ class engine {
   inline int num_pims() {return _num_dpus;}
 
  private:
+  engine();
+  bool _initialized;
+
   friend class rank_engine;
   int _num_ranks_per_numa_node;
   int _num_numa_nodes;
@@ -145,5 +148,7 @@ class engine {
   static std::vector<int> numa_node_of_core_id;
 
 };
+
+
 
 }
