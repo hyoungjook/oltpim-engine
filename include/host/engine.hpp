@@ -3,7 +3,6 @@
 #include <atomic>
 #include <thread>
 #include "global.hpp"
-#include "config.hpp"
 #include "upmem_rank.hpp"
 #include "interface.h"
 
@@ -69,7 +68,7 @@ class rank_engine {
   int init(config conf, information info);
 
   // Push request, called from the client side
-  inline void push(request *req, int core_id);
+  inline void push(request *req);
 
   // Process requests; if conflict, do nothing
   bool process();
@@ -106,18 +105,21 @@ class engine {
  public:
   static engine g_engine;
 
+  // initialize
+  int add_index(index_info info);
   struct config {
     int num_ranks_per_numa_node;
-    uint32_t num_indexes;
-    index_info index_infos[DPU_MAX_NUM_INDEXES];
   };
   void init(config conf);
 
+  void register_worker_thread(int sys_core_id);
+  int get_worker_thread_core_id();
+
   // push() and is_done() internally processes caller's numa node's
   // pending requests.
-  void push(int pim_id, request *req, int sys_core_id);
-  bool is_done(request *req, int sys_core_id);
-  void drain_all(int sys_core_id);
+  void push(int pim_id, request *req);
+  bool is_done(request *req);
+  void drain_all();
 
   inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id].get_rank();}
   inline int num_pims() {return _num_dpus;}
@@ -125,7 +127,10 @@ class engine {
  private:
   engine();
   bool _initialized;
+  // used before initialization
+  std::vector<index_info> _index_infos;
 
+  // properties
   friend class rank_engine;
   int _num_ranks_per_numa_node;
   int _num_numa_nodes;
@@ -142,7 +147,7 @@ class engine {
 
   // Structures for numa_node_id -> [rank_id]s
   std::vector<std::vector<int>> _numa_id_to_rank_ids;
-  bool process_local_numa_rank(int sys_core_id);
+  bool process_local_numa_rank();
 
   // Structrues for core_id -> numa_node_id
   static std::vector<int> numa_node_of_core_id;

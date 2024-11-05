@@ -12,7 +12,7 @@ set(COMMON_CFLAGS -Wall -Werror)
 # DPU codes: only *.c
 set(DPU_BINARY oltpim_dpu)
 set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=8)
-set(DPU_CFLAGS_DEBUG -O0 -g3)
+set(DPU_CFLAGS_DEBUG -O3 -g3) # -O3 required to fit in IRAM
 set(DPU_CFLAGS_RELEASE -O3 -DNDEBUG)
 set(DPU_C_COMPILER dpu-upmem-dpurte-clang)
 file(GLOB DPU_FILES dpu/*.c)
@@ -55,6 +55,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g")
 set(LDFLAGS ${LDFLAGS_DPU_CONFIG} pthread stdc++fs)
 file(GLOB SRC_FILES src/*.cpp)
 add_library(${HOST_LIB} STATIC ${SRC_FILES})
+add_dependencies(${HOST_LIB} build_dpu_binary)
 target_compile_options(${HOST_LIB} PRIVATE ${CFLAGS})
 target_link_libraries(${HOST_LIB} PRIVATE ${LDFLAGS} numa)
 

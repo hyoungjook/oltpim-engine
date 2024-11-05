@@ -12,6 +12,9 @@
 
 namespace oltpim {
 
+// physical core id
+static thread_local int sys_core_id = -1;
+
 // Priorities of request type.
 static const int request_type_priority[] = {
 #define REQUEST_TYPE_PRIORITY(_1, _2, priority, ...) priority,
@@ -145,8 +148,8 @@ int rank_engine::init(config conf, information info) {
   return _num_dpus;
 }
 
-void rank_engine::push(request *req, int core_id) {
-  int numa_node = engine::numa_node_of_core_id[core_id];
+void rank_engine::push(request *req) {
+  int numa_node = engine::numa_node_of_core_id[sys_core_id];
   int priority = request_type_priority[req->req_type];
   _request_lists_per_numa_node[numa_node * num_priorities + priority].push(req);
 }
@@ -252,6 +255,14 @@ std::vector<int> engine::numa_node_of_core_id;
 
 engine::engine(): _initialized(false) {}
 
+int engine::add_index(index_info info) {
+  assert(!_initialized);
+  int index_id = (int)_index_infos.size();
+  _index_infos.push_back(info);
+  assert(_index_infos.size() <= DPU_MAX_NUM_INDEXES);
+  return index_id;
+}
+
 void engine::init(config conf) {
   assert(!_initialized);
   _initialized = true;
@@ -332,8 +343,8 @@ void engine::init(config conf) {
   for (int each_rank = 0; each_rank < _num_ranks; ++each_rank) {
     rank_engine::config rank_config;
     rank_config.dpu_rank = dpu_ranks[each_rank];
-    rank_config.num_indexes = conf.num_indexes;
-    memcpy(&rank_config.index_infos, &conf.index_infos, sizeof(index_info) * DPU_MAX_NUM_INDEXES);
+    rank_config.num_indexes = (uint32_t)_index_infos.size();
+    memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
     auto &re = _rank_engines[each_rank];
     rank_info.rank_id = each_rank;
     int num_dpus_this_rank = re.init(
@@ -349,31 +360,39 @@ void engine::init(config conf) {
     _num_numa_nodes, _num_ranks_per_numa_node, _num_dpus);
 }
 
-void engine::push(int pim_id, request *req, int sys_core_id) {
-  assert(_initialized);
+void engine::register_worker_thread(int sys_core_id_) {
+  sys_core_id = sys_core_id_;
+}
+
+int engine::get_worker_thread_core_id() {
+  return sys_core_id;
+}
+
+void engine::push(int pim_id, request *req) {
+  assert(_initialized && sys_core_id >= 0);
   // Push to the rank engine
   int rank_id = 0, dpu_id = 0;
   pim_id_to_rank_dpu_id(pim_id, rank_id, dpu_id);
   req->dpu_id = dpu_id;
   req->done = false;
-  _rank_engines[rank_id].push(req, sys_core_id);
+  _rank_engines[rank_id].push(req);
 }
 
-bool engine::is_done(request *req, int sys_core_id) {
+bool engine::is_done(request *req) {
   assert(_initialized);
   if (req->done) return true;
   // Process this numa node's rank
-  process_local_numa_rank(sys_core_id);
+  process_local_numa_rank();
   return req->done;
 }
 
-void engine::drain_all(int sys_core_id) {
+void engine::drain_all() {
   assert(_initialized);
   while (true) {
-    bool something_exists = process_local_numa_rank(sys_core_id);
+    bool something_exists = process_local_numa_rank();
     if (!something_exists) {
       sleep(1);
-      something_exists = process_local_numa_rank(sys_core_id);
+      something_exists = process_local_numa_rank();
       if (!something_exists) break;
     }
   }
@@ -393,7 +412,8 @@ void engine::pim_id_to_rank_dpu_id(int pim_id, int &rank_id, int &dpu_id) {
   assert(false);
 }
 
-bool engine::process_local_numa_rank(int sys_core_id) {
+bool engine::process_local_numa_rank() {
+  assert(sys_core_id >= 0);
   bool something_exists = false;
   int numa_node_id = numa_node_of_core_id[sys_core_id];
   // Get ranks of this numa node

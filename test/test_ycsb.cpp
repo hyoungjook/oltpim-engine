@@ -12,8 +12,9 @@
 #include "engine.hpp"
 #include "interface.h"
 
-thread_local std::random_device _random_device;
-thread_local std::mt19937 _rand_gen(_random_device());
+//thread_local std::random_device _random_device;
+//thread_local std::mt19937 _rand_gen(_random_device());
+thread_local std::mt19937 _rand_gen(7777);
 
 struct alignas(64) counter {
   uint64_t commits = 0;
@@ -54,13 +55,12 @@ template <typename F>
 struct coro_scheduler {
 public:
   using handle = std::coroutine_handle<coro_task::promise_type>;
-  coro_scheduler(int num_tasks, F func, int tid_offset, int core_id, bool repeat)
+  coro_scheduler(int num_tasks, F func, int tid_offset, bool repeat)
     : _num_tasks(num_tasks), _next_task(0), _tid_offset(tid_offset),
-      _core_id(core_id), _repeat(repeat), _func(func),
-      _handles(num_tasks)
+      _repeat(repeat), _func(func), _handles(num_tasks)
    {
     for (int i = 0; i < num_tasks; ++i) {
-      _handles[i] = handle::from_promise(*(_func(tid_offset + i, core_id))._p);
+      _handles[i] = handle::from_promise(*(_func(tid_offset + i))._p);
     }
   }
   ~coro_scheduler() {
@@ -80,7 +80,7 @@ public:
         else {
           h.destroy();
           if (_repeat) {
-            h = handle::from_promise(*(_func(_tid_offset + _next_task, _core_id))._p);
+            h = handle::from_promise(*(_func(_tid_offset + _next_task))._p);
             break;
           }
           else {
@@ -95,7 +95,7 @@ public:
     return true;
   }
 private:
-  int _num_tasks, _next_task, _tid_offset, _core_id;
+  int _num_tasks, _next_task, _tid_offset;
   bool _repeat;
   F _func;
   std::vector<handle> _handles;
@@ -139,12 +139,11 @@ int main(int argc, char *argv[]) {
     num_ranks_per_numa_node, num_threads_per_numa_node, batch_size, seconds);
 
   // Initialize engine
-  oltpim::engine::config engine_config;
-  engine_config.num_ranks_per_numa_node = num_ranks_per_numa_node;
-  engine_config.num_indexes = 1;
-  engine_config.index_infos[0].primary = true;
   auto &engine = oltpim::engine::g_engine;
-  engine.init(engine_config);
+  engine.add_index(index_info{.primary = true});
+  engine.init(oltpim::engine::config{
+    .num_ranks_per_numa_node = num_ranks_per_numa_node
+  });
 
   // Required to pin host threads to cores
   int num_cores = std::thread::hardware_concurrency();
@@ -182,7 +181,7 @@ int main(int argc, char *argv[]) {
   // init txn
   const uint64_t keys_per_txn = 10;
   const int init_batch_size = batch_size;
-  auto init_txn = [&](int global_batch_id, int sys_core_id) -> coro_task {
+  auto init_txn = [&](int global_batch_id) -> coro_task {
     const int num_total_batches = init_batch_size * num_threads_per_numa_node * num_numa_nodes;
     const int table_size_per_batch = (table_size + num_total_batches) / num_total_batches;
     const uint64_t start_key = 1 + global_batch_id * table_size_per_batch;
@@ -190,6 +189,7 @@ int main(int argc, char *argv[]) {
     oltpim::request reqs[keys_per_txn];
     args_any_t args[keys_per_txn];
     rets_any_t rets[keys_per_txn];
+    const int worker_thd_core_id = oltpim::engine::g_engine.get_worker_thread_core_id();
 
     for (uint64_t key_base = start_key; key_base < end_key; key_base += keys_per_txn) {
       uint64_t num_keys = std::min(keys_per_txn, end_key - key_base);
@@ -209,14 +209,14 @@ int main(int argc, char *argv[]) {
         arg.index_id = 0;
         reqs[k] = oltpim::request(
           request_type_insert, &args[k], &rets[k], 
-          sizeof(args_insert_t), sizeof(rets_insert_t)
+          sizeof(args_insert_t), req_insert_rets_size(&arg)
         );
         int pim_id = key_to_pim(key);
         touched_pims.insert(pim_id);
-        engine.push(pim_id, &reqs[k], sys_core_id);
+        engine.push(pim_id, &reqs[k]);
       }
       for (uint64_t k = 0; k < num_keys; ++k) {
-        while (!engine.is_done(&reqs[k], sys_core_id)) {
+        while (!engine.is_done(&reqs[k])) {
           co_await std::suspend_always{};
         }
       }
@@ -236,31 +236,32 @@ int main(int argc, char *argv[]) {
         arg.csn = end_csn;
         reqs[cnt] = oltpim::request(
           request_type_commit, &args[cnt], &rets[cnt],
-          sizeof(args_commit_t), sizeof(rets_commit_t)
+          sizeof(args_commit_t), req_commit_rets_size(&arg)
         );
-        engine.push(pim_id, &reqs[cnt], sys_core_id);
+        engine.push(pim_id, &reqs[cnt]);
         ++cnt;
       }
       for (int i = 0; i < cnt; ++i) {
-        while (!engine.is_done(&reqs[i], sys_core_id)) {
+        while (!engine.is_done(&reqs[i])) {
           co_await std::suspend_always{};
         }
       }
 
-      ++counters[sys_core_id].commits;
+      ++counters[worker_thd_core_id].commits;
     }
   };
 
   // test txn
   const int tests_per_txn = 10;
   std::uniform_int_distribution<uint64_t> rand_key_distr(1, table_size + 1);
-  std::discrete_distribution<int> txn_type_distr({8, 1, 1}); // {read%, update%, scan%}
-  auto test_txn = [&](int batch_id, int sys_core_id) -> coro_task {
+  std::discrete_distribution<int> txn_type_distr({8, 1}); // {read%, update%, scan%}
+  auto test_txn = [&](int batch_id) -> coro_task {
     static constexpr int txn_type_read = 0;
     static constexpr int txn_type_update = 1;
     static constexpr int txn_type_scan = 2;
     int txn_type = txn_type_distr(rg);
-    
+    const int worker_thd_core_id = oltpim::engine::g_engine.get_worker_thread_core_id();
+
     if (txn_type == txn_type_scan) {
       uint64_t key = rand_key_distr(rg);
       uint64_t xid = get_new_xid();
@@ -284,8 +285,8 @@ int main(int argc, char *argv[]) {
       );
       int pim_id = key_to_pim(args.keys[0]);
       assert(key_to_pim(args.keys[1]) == pim_id);
-      engine.push(pim_id, &req, sys_core_id);
-      while (!engine.is_done(&req, sys_core_id)) {
+      engine.push(pim_id, &req);
+      while (!engine.is_done(&req)) {
         co_await std::suspend_always{};
       }
 
@@ -310,7 +311,7 @@ int main(int argc, char *argv[]) {
       }
 
       // read-only; skip commit
-      counters[sys_core_id].increment(status);
+      counters[worker_thd_core_id].increment(status);
     }
     else {
       oltpim::request reqs[tests_per_txn];
@@ -332,7 +333,7 @@ int main(int argc, char *argv[]) {
           arg.index_id = 0;
           reqs[i] = oltpim::request(
             request_type_get, &args[i], &rets[i],
-            sizeof(args_get_t), sizeof(rets_get_t)
+            sizeof(args_get_t), req_get_rets_size(&arg)
           );
         }
         else if (txn_type == txn_type_update) {
@@ -344,15 +345,15 @@ int main(int argc, char *argv[]) {
           arg.index_id = 0;
           reqs[i] = oltpim::request(
             request_type_update, &args[i], &rets[i],
-            sizeof(args_update_t), sizeof(rets_update_t)
+            sizeof(args_update_t), req_update_rets_size(&arg)
           );
         }
         int pim_id = key_to_pim(key);
         touched_pims.insert(pim_id);
-        engine.push(pim_id, &reqs[i], sys_core_id);
+        engine.push(pim_id, &reqs[i]);
       }
       for (int i = 0; i < tests_per_txn; ++i) {
-        while (!engine.is_done(&reqs[i], sys_core_id)) {
+        while (!engine.is_done(&reqs[i])) {
           co_await std::suspend_always{};
         }
       }
@@ -416,7 +417,7 @@ int main(int argc, char *argv[]) {
           arg.csn = end_csn;
           reqs[cnt] = oltpim::request(
             request_type_commit, &args[cnt], &rets[cnt],
-            sizeof(args_commit_t), sizeof(rets_commit_t)
+            sizeof(args_commit_t), req_commit_rets_size(&arg)
           );
         }
         else {
@@ -424,19 +425,19 @@ int main(int argc, char *argv[]) {
           arg.xid = xid;
           reqs[cnt] = oltpim::request(
             request_type_abort, &args[cnt], &rets[cnt],
-            sizeof(args_abort_t), sizeof(rets_abort_t)
+            sizeof(args_abort_t), req_abort_rets_size(&arg)
           );
         }
-        engine.push(pim_id, &reqs[cnt], sys_core_id);
+        engine.push(pim_id, &reqs[cnt]);
         ++cnt;
       }
       for (int i = 0; i < cnt; ++i) {
-        while (!engine.is_done(&reqs[i], sys_core_id)) {
+        while (!engine.is_done(&reqs[i])) {
           co_await std::suspend_always{};
         }
       }
 
-      counters[sys_core_id].increment(status);
+      counters[worker_thd_core_id].increment(status);
     }
   };
 
@@ -455,16 +456,17 @@ int main(int argc, char *argv[]) {
       CPU_ZERO(&cpuset);
       CPU_SET(sys_core_id, &cpuset);
       pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+      engine.register_worker_thread(sys_core_id);
     }
 
     {
       // initialize
-      coro_scheduler init_coros(init_batch_size, init_txn, tid * init_batch_size, sys_core_id, false);
+      coro_scheduler init_coros(init_batch_size, init_txn, tid * init_batch_size, false);
       while (true) {
         if (!init_coros.step()) break;
         if (done) break;
       }
-      engine.drain_all(sys_core_id);
+      engine.drain_all();
     }
 
     // barrier
@@ -472,12 +474,12 @@ int main(int argc, char *argv[]) {
 
     {
       // test
-      coro_scheduler test_coros(batch_size, test_txn, 0, sys_core_id, true);
+      coro_scheduler test_coros(batch_size, test_txn, 0, true);
       while (true) {
         test_coros.step();
         if (done) break;
       }
-      engine.drain_all(sys_core_id);
+      engine.drain_all();
     }
   };
 
