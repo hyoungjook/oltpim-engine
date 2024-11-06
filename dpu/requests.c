@@ -73,6 +73,7 @@ static inline void process_insert(args_insert_t *args, rets_insert_t *rets, __mr
     wset_add(args->xid, oid);
   }
   // return
+  rets->oid = oid;
   rets->status = status;
 }
 
@@ -102,6 +103,7 @@ static inline void process_update(args_update_t *args, rets_update_t *rets, __mr
     wset_add(args->xid, oid);
   }
   // return
+  rets->oid = oid;
   rets->status = status;
 }
 
@@ -118,6 +120,7 @@ static inline void process_remove(args_remove_t *args, rets_remove_t *rets, __mr
     wset_add(args->xid, oid);
   }
   // return
+  rets->oid = oid;
   rets->status = status;
 }
 

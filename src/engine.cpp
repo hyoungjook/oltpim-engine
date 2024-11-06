@@ -85,8 +85,10 @@ uint32_t rank_buffer::finalize_args() {
 void rank_buffer::pop_rets(request *req) {
   uint32_t dpu_id = req->dpu_id;
   uint8_t rlen = req->rlen;
-  memcpy(req->rets, &bufs[dpu_id][offsets[dpu_id]], rlen);
-  offsets[dpu_id] += rlen;
+  if (rlen > 0) {
+    memcpy(req->rets, &bufs[dpu_id][offsets[dpu_id]], rlen);
+    offsets[dpu_id] += rlen;
+  }
   req->done = true;
 }
 
@@ -268,10 +270,8 @@ void engine::init(config conf) {
   _initialized = true;
 
   // Information
-  auto dpu_binary_path = std::filesystem::canonical("/proc/self/exe");
-  dpu_binary_path = dpu_binary_path.parent_path().append(DPU_BINARY);
   rank_engine::information rank_info;
-  rank_info.dpu_binary = dpu_binary_path.c_str();
+  rank_info.dpu_binary = DPU_BINARY;
   rank_info.dpu_args_symbol = TOSTRING(DPU_ARGS_SYMBOL);
   rank_info.dpu_rets_symbol = TOSTRING(DPU_RETS_SYMBOL);
   rank_info.dpu_num_indexes_symbol = TOSTRING(DPU_NUM_INDEXES_SYMBOL);

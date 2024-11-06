@@ -3,18 +3,9 @@
 #include <mutex>
 #include <vector>
 
-extern "C" {
-  #include <dpu.h>
-  #include <dpu_config.h>
-  #include <dpu_debug.h>
-  #include <dpu_elf.h>
-  #include <dpu_loader.h>
-  #include <dpu_log.h>
-  #include <dpu_management.h>
-  #include <dpu_memory.h>
-  #include <dpu_program.h>
-  #include <dpu_runner.h>
-}
+struct dpu_transfer_matrix;
+struct dpu_rank_t;
+struct dpu_program_t;
 
 namespace upmem {
 
@@ -56,10 +47,13 @@ class rank {
   struct dpu_rank_t *_rank;
   int _num_dpus;
   int _numa_node;
-  mram_size_t _mram_size;
+  uint32_t _mram_size;
   struct dpu_program_t *_program;
 
-  std::vector<dpu_symbol_t> _registered_symbols;
+  struct dpu_symbol_info {
+    uint32_t address, size;
+  };
+  std::vector<dpu_symbol_info> _registered_symbols;
   static std::mutex _alloc_mutex;
 };
 

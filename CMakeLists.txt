@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.20)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
@@ -33,6 +33,7 @@ add_custom_command(
   DEPENDS ${DPU_FILES}
 )
 add_custom_target(build_dpu_binary ALL DEPENDS ${DPU_BINARY})
+file(REAL_PATH ${DPU_BINARY} DPU_BINARY_PATH BASE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 # Host codes: only *.cpp
 set(HOST_LIB oltpim)
@@ -46,7 +47,7 @@ execute_process(COMMAND dpu-pkg-config --libs dpu
 )
 set(CFLAGS
   ${COMMON_CFLAGS} ${CFLAGS_DPU_CONFIG}
-  -DDPU_BINARY=\"${DPU_BINARY}\"
+  -DDPU_BINARY=\"${DPU_BINARY_PATH}\"
   -std=c++20 -fcoroutines
 )
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")

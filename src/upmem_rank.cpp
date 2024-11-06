@@ -1,5 +1,18 @@
 #include "upmem_rank.hpp"
 
+extern "C" {
+  #include <dpu.h>
+  #include <dpu_config.h>
+  #include <dpu_debug.h>
+  #include <dpu_elf.h>
+  #include <dpu_loader.h>
+  #include <dpu_log.h>
+  #include <dpu_management.h>
+  #include <dpu_memory.h>
+  #include <dpu_program.h>
+  #include <dpu_runner.h>
+}
+
 namespace upmem {
 
 std::mutex rank::_alloc_mutex;
@@ -93,9 +106,7 @@ uint32_t rank::register_dpu_symbol(const char *symbol) {
   for (uint32_t each_symbol = 0; each_symbol < nr_symbols; each_symbol++) {
     dpu_elf_symbol_t *s = _program->symbols->map + each_symbol;
     if (strcmp(s->name, symbol) == 0) {
-      dpu_symbol_t found_symbol;
-      found_symbol.address = s->value;
-      found_symbol.size = s->size;
+      dpu_symbol_info found_symbol = {s->value, s->size};
       uint32_t symbol_id = _registered_symbols.size();
       _registered_symbols.push_back(found_symbol);
       return symbol_id;

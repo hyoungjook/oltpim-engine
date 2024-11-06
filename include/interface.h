@@ -52,8 +52,9 @@ _(0, insert, 0,                     \
     uint64_t csn;                   \
     uint8_t index_id;               \
   , 40,                             \
+    uint32_t oid;                   \
     uint8_t status;                 \
-    uint8_t pad[7];                 \
+    uint8_t pad[3];                 \
   , 8, 0, __VA_ARGS__)              \
 _(1, get, 1,                        \
     uint64_t key;                   \
@@ -72,6 +73,7 @@ _(2, update, 1,                     \
     uint8_t index_id;               \
   , 40,                             \
     uint64_t old_value;             \
+    uint32_t oid;                   \
     uint8_t status;                 \
   , 16, 0, __VA_ARGS__)             \
 _(3, remove, 1,                     \
@@ -80,8 +82,9 @@ _(3, remove, 1,                     \
     uint64_t csn;                   \
     uint8_t index_id;               \
   , 32,                             \
+    uint32_t oid;                   \
     uint8_t status;                 \
-    uint8_t pad[7];                 \
+    uint8_t pad[3];                 \
   , 8, 0, __VA_ARGS__)              \
 _(4, scan, 1,                       \
     uint8_t max_outs;               \
