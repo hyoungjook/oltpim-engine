@@ -85,10 +85,8 @@ uint32_t rank_buffer::finalize_args() {
 void rank_buffer::pop_rets(request *req) {
   uint32_t dpu_id = req->dpu_id;
   uint8_t rlen = req->rlen;
-  if (rlen > 0) {
-    memcpy(req->rets, &bufs[dpu_id][offsets[dpu_id]], rlen);
-    offsets[dpu_id] += rlen;
-  }
+  memcpy(req->rets, &bufs[dpu_id][offsets[dpu_id]], rlen);
+  offsets[dpu_id] += rlen;
   req->done = true;
 }
 
@@ -168,32 +166,42 @@ bool rank_engine::process() {
       // Gather requests to this rank
       for (int priority = 0; priority < num_priorities; ++priority) {
         for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-          _reqlists[priority * _num_numa_nodes + each_node] =
-            _request_lists_per_numa_node[each_node * num_priorities + priority].move();
+          request *const reqlist = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
+          _reqlists[priority * _num_numa_nodes + each_node] = reqlist;
+          something_exists = something_exists || (reqlist != nullptr);
         }
       }
 
-      // Construct buffer
-      _buffer.reset_offsets();
-      memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
-      for (int priority = 0; priority < num_priorities; ++priority) {
-        for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-          request *req = _reqlists[priority * _num_numa_nodes + each_node];
-          while (req) {
-            _buffer.push_args(req);
-            _rets_offset_counter[req->dpu_id] += req->rlen;
-            something_exists = true;
-            req = req->next;
+      if (something_exists) {
+        // Construct buffer
+        _buffer.reset_offsets();
+        memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
+        for (int priority = 0; priority < num_priorities; ++priority) {
+          for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+            request **req_ptr = &_reqlists[priority * _num_numa_nodes + each_node];
+            request *req;
+            while ((req = *req_ptr)) {
+              something_exists = true;
+              _buffer.push_args(req);
+              if (req->rlen > 0) {
+                // increment rets offset counter
+                _rets_offset_counter[req->dpu_id] += req->rlen;
+                req_ptr = &(req->next);
+              }
+              else {
+                // if req has no return value, remove it from the list
+                *req_ptr = req->next;
+                req->done = true;
+              }
+            }
+          }
+          // Insert separator
+          if (priority < num_priorities - 1) {
+            _buffer.push_priority_separator();
           }
         }
-        // Insert separator
-        if (priority < num_priorities - 1) {
-          _buffer.push_priority_separator();
-        }
-      }
 
-      // Check request exists
-      if (something_exists) {
+        // Compute max lengths
         uint32_t max_alength = _buffer.finalize_args();
         max_alength = ALIGN8(max_alength);
         uint32_t max_rlength = 0;
