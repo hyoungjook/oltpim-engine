@@ -21,16 +21,26 @@ typedef uint64_t csn_t;
 void object_init_global();
 
 /**
+ * !!!!! Note that although we use the same "oid_t",
+ * primary indexes stores oid managed by the oid manager
+ * whereas secondary indexes' oids are irrelevant from the
+ * primary indexes' oid.
+ * It's just the internal pointer to the version data.
+ */
+
+/**
  * Create an object and acquire it.
  * @param xid xid of the creator txn.
  * @param new_value initial value for the object.
+ * @param primary for primary index, or for secondary index
  * @return oid of the new object.
  */
-oid_t object_create_acquire(xid_t xid, object_value_t new_value);
+oid_t object_create_acquire(xid_t xid, object_value_t new_value, bool primary);
 
 /**
  * Call right after object_create, cancels the creation.
  * Assume the oid is not exposed to the outside world.
+ * ONLY FOR PRIMARY OID.
  * @param oid oid.
  */
 void object_cancel_create(oid_t oid);
@@ -47,6 +57,7 @@ bool object_read(oid_t oid, xid_t xid, csn_t csn, object_value_t *value);
 
 /**
  * Update the object.
+ * ONLY FOR PRIMARY OID.
  * @param oid oid.
  * @param xid xid of the updater txn.
  * @param csn begin_csn of the updater txn.

@@ -1,10 +1,11 @@
 #include "btree.h"
+#include "global.h"
 #include <mram.h>
 #include <alloc.h>
 #include <stdalign.h>
 #include <mutex.h>
-#include <string.h>
 #include <assert.h>
+#include <string.h>
 #include <stddef.h>
 #include <stdio.h>
 
@@ -249,7 +250,7 @@ void btree_scan(btree_t bt, btree_key_t *keys,
     if (!callback(node_buf.arr.leaf.values[slot], args))
       break;
     ++slot;
-    if (slot >= DEGREE) {
+    if (slot >= node_buf.num_keys) {
       node_id = node_buf.arr.leaf.next;
       if (node_id == node_id_null) break;
       slot = 0;
@@ -301,7 +302,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
     node_lock(node_id);
   }
   const int16_t max_depth = depth;
-  assert(max_depth < MAX_DEPTH);
+  assert_print(max_depth < MAX_DEPTH);
 
   // Insert to leaf
   if (!allow_duplicates && slot < node_buf.num_keys && node_buf.keys[slot] == key) {
@@ -391,7 +392,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
 #ifdef btree_debug
 void node_print(node_t *node) {
   for (uint16_t i = 0; i < node->num_keys; node++) {
-    printf("%lu ", node->keys[i]);
+    printf("(%lu,%u) ", node->keys[i], node->arr.leaf.values[i]);
   }
   printf("\n");
 }
@@ -399,8 +400,6 @@ void node_print(node_t *node) {
 void btree_print(btree_t bt) {
   __dma_aligned node_t node_buf;
   node_id_t node_id;
-  uint16_t slot;
-
   node_id = ((desc_t*)bt)->root;
   while (true) {
     node_read(&node_buf, node_id);

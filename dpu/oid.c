@@ -1,4 +1,5 @@
 #include "oid.h"
+#include "global.h"
 #include <mram.h>
 #include <mutex.h>
 #include <assert.h>
@@ -45,9 +46,7 @@ void oid_manager_init_global() {
 oid_t oid_alloc_set(oid_value_t val) {
   mutex_lock(oid_array_mutex);
   // pop free list and alloc one
-  if (oid_free_list_head == oid_value_null) {
-    assert(false); // OOM
-  }
+  assert_print(oid_free_list_head != oid_value_null); // OOM
   oid_value_t new_free_list_head = oid_array_read(oid_free_list_head);
   oid_t new_oid = oid_free_list_head;
   oid_free_list_head = new_free_list_head;

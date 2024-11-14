@@ -234,6 +234,7 @@ bool rank_engine::process() {
         exit(1);
       }
       if (pim_done) {
+        //_rank.log_read(stdout); // debug
         // Copy rets from rank
         _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, _max_rlength, false);
 

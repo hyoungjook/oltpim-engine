@@ -291,6 +291,7 @@ int main(int argc, char *argv[]) {
       }
 
       int status = rets->status;
+      CHECK_VALID_STATUS(status);
       int expected_outs = 0;
       for (uint64_t key = args.keys[0]; key <= args.keys[1]; ++key) {
         if (1 <= key && key <= (uint64_t)table_size) {
@@ -331,6 +332,7 @@ int main(int argc, char *argv[]) {
           arg.xid = xid;
           arg.csn = begin_csn;
           arg.index_id = 0;
+          arg.oid_query = 0;
           reqs[i] = oltpim::request(
             request_type_get, &args[i], &rets[i],
             sizeof(args_get_t), req_get_rets_size(&arg)

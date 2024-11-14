@@ -24,9 +24,12 @@ static_assert((sizeof(index_info) * DPU_MAX_NUM_INDEXES) % 8 == 0, "");
  * Status codes
  */
 typedef uint8_t status_t;
-#define STATUS_SUCCESS  ((status_t)0)
-#define STATUS_FAILED   ((status_t)1)
-#define STATUS_CONFLICT ((status_t)2)
+#define STATUS_SUCCESS  ((status_t)1)
+#define STATUS_FAILED   ((status_t)2)
+#define STATUS_CONFLICT ((status_t)3)
+#define CHECK_VALID_STATUS(status) \
+  assert(((status) >= STATUS_SUCCESS) || \
+         ((status) <= STATUS_CONFLICT))
 
 /**
  * Request Type Specification
@@ -61,6 +64,7 @@ _(1, get, 1,                        \
     uint64_t xid;                   \
     uint64_t csn;                   \
     uint8_t index_id;               \
+    uint8_t oid_query;              \
   , 32,                             \
     uint64_t value;                 \
     uint8_t status;                 \
@@ -112,6 +116,11 @@ _(6, abort, 0,                      \
   , 8, -8, __VA_ARGS__)             \
 
 #define NUM_PRIORITIES 2
+
+/* Secondary index value */
+#define SVALUE_MAKE(pim_id, oid) (((uint64_t)(pim_id) << 32) | ((uint64_t)(oid)))
+#define SVALUE_GET_OID(svalue) (uint32_t)(svalue)
+#define SVALUE_GET_PIMID(svalue) (uint16_t)(svalue >> 32)
 
 /* Common request definitions */
 #define DECLARE_REQUEST(type_id, name, priority, args_struct, args_size,  \

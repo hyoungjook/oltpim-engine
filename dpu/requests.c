@@ -1,10 +1,12 @@
 #include <stddef.h>
 #include <attributes.h>
+#include <stdio.h>
 #include "interface.h"
 #include "requests.h"
 #include "btree.h"
 #include "object.h"
 #include "wset.h"
+#include "global.h"
 
 #define NUM_INDEXES DPU_NUM_INDEXES_SYMBOL
 #define INDEX_INFOS DPU_INDEX_INFOS_SYMBOL
@@ -44,15 +46,17 @@ void process_request(request_type_t request_type, args_any_t *args, rets_any_t *
 static_assert(sizeof(btree_val_t) == sizeof(oid_t), "");
 
 static inline void process_insert(args_insert_t *args, rets_insert_t *rets, __mram_ptr uint8_t *_) {
-  assert(args->index_id < NUM_INDEXES);
+  assert_print(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = true; // default, if btree_insert succeeds
   // Allocate object
-  oid_t oid = object_create_acquire(args->xid, args->value);
+  oid_t oid = object_create_acquire(args->xid, args->value,
+    INDEX_INFOS[args->index_id].primary);
   // Try insert to btree
   btree_val_t old_oid = btree_insert(index_trees[args->index_id], args->key, oid);
   if (old_oid != BTREE_NOVAL) {
     // key already exists
+    assert_print(INDEX_INFOS[args->index_id].primary);
     object_cancel_create(oid);
     oid = old_oid;
     if (!object_read(oid, args->xid, args->csn, NULL)) {
@@ -78,10 +82,17 @@ static inline void process_insert(args_insert_t *args, rets_insert_t *rets, __mr
 }
 
 static inline void process_get(args_get_t *args, rets_get_t *rets, __mram_ptr uint8_t *_) {
-  assert(args->index_id < NUM_INDEXES);
+  assert_print(args->index_id < NUM_INDEXES);
   status_t status = STATUS_FAILED;
   // query btree
-  oid_t oid = btree_get(index_trees[args->index_id], args->key);
+  oid_t oid;
+  if (args->oid_query) {
+    assert_print(INDEX_INFOS[args->index_id].primary);
+    oid = (oid_t)args->key;
+  }
+  else {
+    oid = btree_get(index_trees[args->index_id], args->key);
+  }
   if (oid != BTREE_NOVAL && object_read(oid, args->xid, args->csn, &rets->value)) {
     status = STATUS_SUCCESS;
   }
@@ -90,7 +101,8 @@ static inline void process_get(args_get_t *args, rets_get_t *rets, __mram_ptr ui
 }
 
 static inline void process_update(args_update_t *args, rets_update_t *rets, __mram_ptr uint8_t *_) {
-  assert(args->index_id < NUM_INDEXES);
+  assert_print(args->index_id < NUM_INDEXES);
+  assert_print(INDEX_INFOS[args->index_id].primary);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
@@ -108,7 +120,8 @@ static inline void process_update(args_update_t *args, rets_update_t *rets, __mr
 }
 
 static inline void process_remove(args_remove_t *args, rets_remove_t *rets, __mram_ptr uint8_t *_) {
-  assert(args->index_id < NUM_INDEXES);
+  assert_print(args->index_id < NUM_INDEXES);
+  assert_print(INDEX_INFOS[args->index_id].primary);
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
@@ -148,8 +161,8 @@ static bool scan_callback(oid_t oid, void *args) {
 }
 
 static inline void process_scan(args_scan_t *args, rets_scan_t *rets, __mram_ptr uint8_t *mrets) {
-  assert(args->index_id < NUM_INDEXES);
-  assert(args->keys[0] <= args->keys[1]);
+  assert_print(args->index_id < NUM_INDEXES);
+  assert_print(args->keys[0] <= args->keys[1]);
   scan_callback_args scan_args;
   scan_args.xid = args->xid;
   scan_args.csn = args->csn;

@@ -1,4 +1,5 @@
 #include "object.h"
+#include "global.h"
 #include <mram.h>
 #include <assert.h>
 #include <mutex.h>
@@ -38,10 +39,19 @@ typedef union _version_t {
     object_value_t value;
     version_id_t next;
   } v;
+  struct _secondary_entry {
+    version_meta meta;
+    csn_t begin_csn, end_csn;
+    object_value_t value;
+  } s;
   version_freeptr freeptr;
 } version_t;
 static_assert(sizeof(version_t) % 8 == 0, "");
 static_assert(sizeof(struct _version_freeptr) == 8, "");
+
+#define SECONDARY_OID_TO_VID(oid) ((oid) & 0x7FFFFFFFUL)
+#define SECONDARY_VID_TO_OID(vid) ((vid) | 0x80000000UL)
+#define IS_SECONDARY_OID(oid) ((bool)((oid) & 0x80000000UL))
 
 /* Allocator */
 // version_id_t is the index into the allocator array
@@ -70,9 +80,7 @@ static inline void ver_pool_write_freeptr(version_id_t vid, version_id_t ptr) {
 // Should manually mark freeptr.meta.is_free=0 after this
 static version_id_t version_alloc() {
   mutex_lock(ver_alloc_mutex);
-  if (ver_free_list_head == version_id_null) {
-    assert(false); // OOM
-  }
+  assert_print(ver_free_list_head != version_id_null); // OOM
   version_id_t new_free_list_head = ver_pool_read_freeptr(ver_free_list_head);
   version_id_t new_vid = ver_free_list_head;
   ver_free_list_head = new_free_list_head;
@@ -114,21 +122,36 @@ void object_init_global() {
   ver_free_list_head = 0;
 }
 
-oid_t object_create_acquire(xid_t xid, object_value_t new_value) {
+oid_t object_create_acquire(xid_t xid, object_value_t new_value, bool primary) {
   __dma_aligned version_t ver_buf;
-  ver_buf.v.csn = xid;
-  ver_buf.v.value = new_value;
-  ver_buf.v.next = version_id_null;
+  if (primary) {
+    ver_buf.v.csn = xid;
+    ver_buf.v.value = new_value;
+    ver_buf.v.next = version_id_null;
+  }
+  else {
+    ver_buf.s.begin_csn = xid;
+    ver_buf.s.end_csn = (csn_t)-1;
+    ver_buf.s.value = new_value;
+  }
   ver_buf.v.meta.is_free_slot = 0;
   ver_buf.v.meta.dirty = true;
   ver_buf.v.meta.deleted = false;
   version_id_t vid = version_alloc();
   version_write(vid, &ver_buf);
-  oid_t oid = oid_alloc_set(vid);
+  oid_t oid;
+  if (primary) {
+    oid = oid_alloc_set(vid);
+  }
+  else {
+    // For secondary index, oid is just vid with MSB set to 1.
+    oid = SECONDARY_VID_TO_OID(vid);
+  }
   return oid;
 }
 
 void object_cancel_create(oid_t oid) {
+  assert_print(!IS_SECONDARY_OID(oid));
   version_id_t vid = oid_get(oid);
   version_free(vid);
   oid_free(oid);
@@ -138,32 +161,48 @@ bool object_read(oid_t oid, xid_t xid, csn_t csn, object_value_t *value) {
   __dma_aligned version_t ver_buf;
   // get the vid
   version_id_t vid;
-  retry:
-  vid = oid_get(oid);
-  // traverse the version chain
-  while (vid != version_id_null) {
-    version_read(vid, &ver_buf);
-    if (ver_buf.v.meta.is_free_slot) {
-      // this version is freed, retry from start
-      goto retry;
-    }
-    if (
-      (ver_buf.v.meta.dirty && (ver_buf.v.csn == xid)) || // dirty version by me
-      (!ver_buf.v.meta.dirty && (ver_buf.v.csn <= csn)) // visible version
-    ) {
-      if (ver_buf.v.meta.deleted) {
-        return false; // deleted object
+  if (!IS_SECONDARY_OID(oid)) { // primary
+    retry:
+    vid = oid_get(oid);
+    // traverse the version chain
+    while (vid != version_id_null) {
+      version_read(vid, &ver_buf);
+      if (ver_buf.v.meta.is_free_slot) {
+        // this version is freed, retry from start
+        goto retry;
       }
-      if (value) *value = ver_buf.v.value;
+      if (
+        (ver_buf.v.meta.dirty && (ver_buf.v.csn == xid)) || // dirty version by me
+        (!ver_buf.v.meta.dirty && (ver_buf.v.csn <= csn)) // visible version
+      ) {
+        if (ver_buf.v.meta.deleted) {
+          return false; // deleted object
+        }
+        if (value) *value = ver_buf.v.value;
+        return true;
+      }
+      vid = ver_buf.v.next;
+    }
+    return false;
+  }
+  else { // secondary
+    vid = SECONDARY_OID_TO_VID(oid);
+    version_read(vid, &ver_buf);
+    if (
+        (ver_buf.s.meta.dirty) ?
+          (ver_buf.s.begin_csn == xid) :  // dirty version by me
+          (ver_buf.s.begin_csn <= csn && csn < ver_buf.s.end_csn) // visible version
+      ) {
+      if (value) *value = ver_buf.s.value;
       return true;
     }
-    vid = ver_buf.v.next;
+    return false;
   }
-  return false;
 }
 
 status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value,
     object_value_t *old_value, bool remove, bool *add_to_write_set) {
+  assert_print(!IS_SECONDARY_OID(oid));
   __dma_aligned version_t ver_buf;
   // get the vid
   version_id_t vid;
@@ -233,20 +272,39 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
 
 void object_finalize(oid_t oid, xid_t xid, csn_t csn, bool commit) {
   __dma_aligned version_t ver_buf;
-  version_id_t vid = oid_get(oid);
-  assert(vid != version_id_null);
-  version_read(vid, &ver_buf);
-  assert(!ver_buf.v.meta.is_free_slot);
-  assert(ver_buf.v.meta.dirty && ver_buf.v.csn == xid);
-  if (commit) {
-    // expose the dirty head
-    ver_buf.v.csn = csn;
-    ver_buf.v.meta.dirty = false;
-    version_write(vid, &ver_buf);
+  version_id_t vid;
+  if (!IS_SECONDARY_OID(oid)) { // primary
+    vid = oid_get(oid);
+    assert_print(vid != version_id_null);
+    version_read(vid, &ver_buf);
+    assert_print(!ver_buf.v.meta.is_free_slot);
+    assert_print(ver_buf.v.meta.dirty && ver_buf.v.csn == xid);
+    if (commit) {
+      // expose the dirty head
+      ver_buf.v.csn = csn;
+      ver_buf.v.meta.dirty = false;
+      version_write(vid, &ver_buf);
+    }
+    else { // abort
+      // remove the dirty head
+      oid_set(oid, ver_buf.v.next);
+      version_free(vid);
+    }
   }
-  else { // abort
-    // remove the dirty head
-    oid_set(oid, ver_buf.v.next);
-    version_free(vid);
+  else {
+    vid = SECONDARY_OID_TO_VID(oid);
+    version_read(vid, &ver_buf);
+    assert_print(!ver_buf.s.meta.is_free_slot);
+    assert_print(ver_buf.s.meta.dirty && ver_buf.s.begin_csn == xid);
+    if (commit) {
+      ver_buf.s.begin_csn = csn;
+      ver_buf.s.meta.dirty = false;
+      version_write(vid, &ver_buf);
+    }
+    else { // abort
+      ver_buf.s.begin_csn = (csn_t)-1;
+      ver_buf.s.meta.dirty = false;
+      version_write(vid, &ver_buf);
+    }
   }
 }

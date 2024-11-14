@@ -1,4 +1,5 @@
 #include "wset.h"
+#include "global.h"
 #include <mram.h>
 #include <mutex.h>
 #include <assert.h>
@@ -6,7 +7,7 @@
 
 /* Configs */
 #define LIST_DEGREE (30)
-#define LIST_ALLOCATOR_SIZE_BITS (13)
+#define LIST_ALLOCATOR_SIZE_BITS (16)
 #define LIST_ALLOCATOR_SIZE (1UL << LIST_ALLOCATOR_SIZE_BITS)
 #define HASHMAP_SIZE_BITS (15)
 #define HASHMAP_SIZE (1UL << HASHMAP_SIZE_BITS)
@@ -58,9 +59,7 @@ static void ws_pool_init_global() {
 
 static ws_node_id_t ws_node_alloc() {
   mutex_lock(ws_alloc_mutex);
-  if (ws_free_list_head == ws_node_id_null) {
-    assert(false); // OOM
-  }
+  assert_print(ws_free_list_head != ws_node_id_null); // OOM
   ws_node_id_t new_free_list_head = ws_pool_read_freeptr(ws_free_list_head);
   ws_node_id_t new_id = ws_free_list_head;
   ws_free_list_head = new_free_list_head;

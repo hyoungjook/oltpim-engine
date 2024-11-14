@@ -63,7 +63,7 @@ int main() {
 
       // Check priority barrier
     if (curr_priority < priority_frontier) {
-      assert(curr_priority + 1 == priority_frontier);
+      assert_print(curr_priority + 1 == priority_frontier);
       curr_priority = priority_frontier;
       mutex_unlock(args_mutex);
       barrier_wait(&main_barrier);
@@ -118,6 +118,6 @@ int main() {
 
   }
 
-  assert(priority_frontier == NUM_PRIORITIES - 1);
+  assert_print(priority_frontier == NUM_PRIORITIES - 1);
   return 0;
 }
