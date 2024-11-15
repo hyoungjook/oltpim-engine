@@ -87,7 +87,7 @@ void rank_buffer::pop_rets(request *req) {
   uint8_t rlen = req->rlen;
   memcpy(req->rets, &bufs[dpu_id][offsets[dpu_id]], rlen);
   offsets[dpu_id] += rlen;
-  req->done = true;
+  __atomic_store_1(&req->done, true, __ATOMIC_RELEASE);
 }
 
 request_list::request_list() {
@@ -191,7 +191,7 @@ bool rank_engine::process() {
               else {
                 // if req has no return value, remove it from the list
                 *req_ptr = req->next;
-                req->done = true;
+                __atomic_store_1(&req->done, true, __ATOMIC_RELEASE);
               }
             }
           }
