@@ -112,6 +112,15 @@ class engine {
   };
   void init(config conf);
 
+  // The oltpim engine processes the requests on the same numa node only.
+  // Hence, if a worker thread submits a request to the pim module
+  // which is handled by a thread in another numa node and that thread
+  // is already terminated, the request will never be serviced.
+  // *numa_ignore* avoids this problem by allowing threads to serve
+  // requests in different numa node. It will slow down the performance,
+  // so it should be only used for wrapups after the measurement.
+  void set_numa_ignore(bool numa_ignore) {_numa_ignore = numa_ignore;}
+
   void register_worker_thread(int sys_core_id);
   int get_worker_thread_core_id();
 
@@ -127,6 +136,7 @@ class engine {
  private:
   engine();
   bool _initialized;
+  bool _numa_ignore;
   // used before initialization
   std::vector<index_info> _index_infos;
 
@@ -148,6 +158,7 @@ class engine {
   // Structures for numa_node_id -> [rank_id]s
   std::vector<std::vector<int>> _numa_id_to_rank_ids;
   bool process_local_numa_rank();
+  void process_all_ranks();
 
   // Structrues for core_id -> numa_node_id
   static std::vector<int> numa_node_of_core_id;

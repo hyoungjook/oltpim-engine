@@ -277,6 +277,7 @@ int engine::add_index(index_info info) {
 void engine::init(config conf) {
   assert(!_initialized);
   _initialized = true;
+  _numa_ignore = false;
 
   // Information
   rank_engine::information rank_info;
@@ -392,6 +393,9 @@ bool engine::is_done(request *req) {
   if (req->done) return true;
   // Process this numa node's rank
   process_local_numa_rank();
+  if (_numa_ignore) {
+    process_all_ranks();
+  }
   return req->done;
 }
 
@@ -432,6 +436,12 @@ bool engine::process_local_numa_rank() {
     something_exists = something_exists || exists;
   }
   return something_exists;
+}
+
+void engine::process_all_ranks() {
+  for (auto &re: _rank_engines) {
+    re.process();
+  }
 }
 
 }
