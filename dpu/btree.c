@@ -4,6 +4,7 @@
 #include <alloc.h>
 #include <stdalign.h>
 #include <mutex.h>
+#include <mutex_pool.h>
 #include <assert.h>
 #include <string.h>
 #include <stddef.h>
@@ -16,6 +17,7 @@
 #define DEGREE_LEFT ((DEGREE) - (DEGREE_RIGHT))
 #define BTREE_ALLOCATOR_SIZE_BITS (16)
 #define BTREE_ALLOCATOR_SIZE (1UL << BTREE_ALLOCATOR_SIZE_BITS) // 64K
+#define BTREE_LOCK_MUTEX_NUM (16)
 
 /* Types */
 typedef uint32_t node_id_t;
@@ -65,78 +67,52 @@ static inline void node_write(node_t *wram_buf, node_id_t node_id) {
 }
 
 /* Lock manager for synchronizing writers */
-#define LOCK_HASHSET_SIZE_BITS (8)
-#define LOCK_HASHSET_SIZE (1UL << LOCK_HASHSET_SIZE_BITS)
-#define LOCK_HASH_MASK (LOCK_HASHSET_SIZE - 1)
-static volatile node_id_t lock_manager_hashset[LOCK_HASHSET_SIZE];
-MUTEX_INIT(lock_manager_mutex);
+static_assert(BTREE_ALLOCATOR_SIZE % 64 == 0, "");
+static __mram uint64_t node_lock_bitmap[BTREE_ALLOCATOR_SIZE / 64];
+MUTEX_POOL_INIT(node_lock_mutex, BTREE_LOCK_MUTEX_NUM);
 static void lock_init_global() {
-  for (uint32_t i = 0; i < LOCK_HASHSET_SIZE; i++) {
-    lock_manager_hashset[i] = node_id_null;
-  }
-}
-
-// robin hood hashing
-// if succeed, *hash_id is the id where value is inserted.
-// if failed, *hash_id is the id of conflicting element
-static inline bool hashset_insert_if_absent(uint32_t new_value, uint32_t *id) {
-  uint32_t hash_id = new_value & LOCK_HASH_MASK;
-  uint32_t insert_target = new_value;
-  while (true) {
-    uint32_t old_value = lock_manager_hashset[hash_id];
-    if (old_value == new_value) {
-      *id = hash_id;
-      return false; // already in the set
-    }
-    if (old_value == node_id_null) {
-      if (insert_target == new_value) *id = hash_id;
-      lock_manager_hashset[hash_id] = insert_target;
-      return true; // insert succeed
-    }
-    if ((((insert_target & LOCK_HASH_MASK) - hash_id) & LOCK_HASH_MASK) >
-        (((old_value & LOCK_HASH_MASK) - hash_id) & LOCK_HASH_MASK)) {
-      // swap
-      if (insert_target == new_value) *id = hash_id;
-      lock_manager_hashset[hash_id] = insert_target;
-      insert_target = old_value;
-    }
-    hash_id = (hash_id + 1) & LOCK_HASH_MASK;
-  }
-}
-
-static inline void hashset_delete(uint32_t value) {
-  uint32_t hash_id = value & LOCK_HASH_MASK;
-  while (lock_manager_hashset[hash_id] != value) {
-    hash_id = (hash_id + 1) & LOCK_HASH_MASK;
-  }
-  while (true) {
-    uint32_t next_hash_id = (hash_id + 1) & LOCK_HASH_MASK;
-    uint32_t next_value = lock_manager_hashset[next_hash_id];
-    if ((next_value == node_id_null) ||
-        ((next_value & LOCK_HASH_MASK) == next_hash_id)) {
-      lock_manager_hashset[hash_id] = node_id_null;
-      return;
-    }
-    lock_manager_hashset[hash_id] = next_value;
-    hash_id = next_hash_id;
+  for (uint32_t i = 0; i < (BTREE_ALLOCATOR_SIZE / 64); ++i) {
+    node_lock_bitmap[i] = 0;
   }
 }
 
 static void node_lock(node_id_t node_id) {
+  const uint16_t bitmap_idx = node_id >> 6; // node_id / 64
+  const uint64_t bitmap_mask = ((uint64_t)1) << (node_id & 63); // 1 << (node_id % 64)
+  __dma_aligned uint64_t bitmap_buf;
+  __mram_ptr uint64_t *const bitmap_ptr = &node_lock_bitmap[bitmap_idx];
   while (true) {
-    uint32_t id;
-    mutex_lock(lock_manager_mutex);
-    bool inserted = hashset_insert_if_absent(node_id, &id);
-    mutex_unlock(lock_manager_mutex);
-    if (inserted) break;
-    while (lock_manager_hashset[id] == node_id);
+    mutex_pool_lock(&node_lock_mutex, bitmap_idx);
+    mram_read(bitmap_ptr, &bitmap_buf, sizeof(uint64_t));
+    if ((bitmap_buf & bitmap_mask) == 0) {
+      // the bit is free; set the bit
+      bitmap_buf = bitmap_buf | bitmap_mask;
+      mram_write(&bitmap_buf, bitmap_ptr, sizeof(uint64_t));
+      mutex_pool_unlock(&node_lock_mutex, bitmap_idx);
+      break;
+    }
+    // the bit is acquired; unlock and wait
+    mutex_pool_unlock(&node_lock_mutex, bitmap_idx);
+    // unsafe wait
+    while (true) {
+      mram_read(bitmap_ptr, &bitmap_buf, sizeof(uint64_t));
+      if ((bitmap_buf & bitmap_mask) == 0) {
+        break;
+      }
+    }
   }
 }
 
 static void node_unlock(node_id_t node_id) {
-  mutex_lock(lock_manager_mutex);
-  hashset_delete(node_id);
-  mutex_unlock(lock_manager_mutex);
+  const uint16_t bitmap_idx = node_id >> 6;
+  const uint64_t bitmap_mask = ((uint64_t)1) << (node_id & 63); // 1 << (node_id % 64)
+  __dma_aligned uint64_t bitmap_buf;
+  __mram_ptr uint64_t *const bitmap_ptr = &node_lock_bitmap[bitmap_idx];
+  mutex_pool_lock(&node_lock_mutex, bitmap_idx);
+  mram_read(bitmap_ptr, &bitmap_buf, sizeof(uint64_t));
+  bitmap_buf = bitmap_buf & (~bitmap_mask); // unset the bit
+  mram_write(&bitmap_buf, bitmap_ptr, sizeof(uint64_t));
+  mutex_pool_unlock(&node_lock_mutex, bitmap_idx);
 }
 
 /* Helpers */
