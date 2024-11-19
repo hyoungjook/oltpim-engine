@@ -9,6 +9,7 @@ extern "C" {
   #include <dpu_log.h>
   #include <dpu_management.h>
   #include <dpu_memory.h>
+  #include <dpu_profiler.h>
   #include <dpu_program.h>
   #include <dpu_runner.h>
 }
@@ -74,6 +75,12 @@ void rank::load(const char *binary_path) {
     dpu_take_program_ref(_program);
     dpu_set_program(dpu, _program);
   }
+  DPU_ASSERT(dpu_fill_profiling_info(_rank,
+    (iram_addr_t)_program->mcount_address,
+    (iram_addr_t)_program->ret_mcount_address,
+    (wram_addr_t)_program->thread_profiling_address,
+    (wram_addr_t)_program->perfcounter_end_value_address,
+    _program->profiling_symbols));
   dpu_loader_fill_rank_context(&loader_context, _rank);
   DPU_ASSERT(dpu_elf_load(elf_info, &loader_context));
 
