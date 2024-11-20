@@ -6,10 +6,7 @@
 #include <stddef.h>
 
 /* Configs */
-#define LIST_DEGREE (30)
-#define LIST_ALLOCATOR_SIZE_BITS (16)
 #define LIST_ALLOCATOR_SIZE (1UL << LIST_ALLOCATOR_SIZE_BITS)
-#define HASHMAP_SIZE_BITS (15)
 #define HASHMAP_SIZE (1UL << HASHMAP_SIZE_BITS)
 
 /* Write set list */
@@ -29,6 +26,7 @@ typedef union _ws_list_node_t {
 } ws_list_node_t;
 static_assert(sizeof(ws_list_node_t) % 8 == 0, "");
 static_assert((sizeof(oid_t) * LIST_DEGREE) % 8 == 0, "");
+static_assert(sizeof(ws_list_node_t) == __LIST_ALLOCATOR_SIZEOF_ENTITY, "");
 
 // write_set_t is the index into the allocator array
 static __mram_noinit ws_list_node_t ws_alloc_pool[LIST_ALLOCATOR_SIZE];

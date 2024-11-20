@@ -11,11 +11,8 @@
 #include <stdio.h>
 
 /* Configs */
-#define DEGREE (20)
-#define MAX_DEPTH (16)
-#define DEGREE_RIGHT ((DEGREE) / 2)
-#define DEGREE_LEFT ((DEGREE) - (DEGREE_RIGHT))
-#define BTREE_ALLOCATOR_SIZE_BITS (16)
+#define DEGREE_RIGHT ((BT_DEGREE) / 2)
+#define DEGREE_LEFT ((BT_DEGREE) - (DEGREE_RIGHT))
 #define BTREE_ALLOCATOR_SIZE (1UL << BTREE_ALLOCATOR_SIZE_BITS) // 64K
 #define BTREE_LOCK_MUTEX_NUM (16)
 
@@ -23,11 +20,11 @@
 typedef uint32_t node_id_t;
 #define node_id_null ((node_id_t)-1)
 typedef struct _node_t {
-  btree_key_t keys[DEGREE];
+  btree_key_t keys[BT_DEGREE];
   union {
-    node_id_t children[DEGREE+1];
+    node_id_t children[BT_DEGREE+1];
     struct {
-      btree_val_t values[DEGREE];
+      btree_val_t values[BT_DEGREE];
       node_id_t next;
     } leaf;
   } arr;
@@ -35,6 +32,7 @@ typedef struct _node_t {
   bool is_leaf;
 } node_t;
 static_assert(sizeof(node_t) % 8 == 0, "");
+static_assert(sizeof(node_t) == __BTREE_ALLOCATOR_SIZEOF_ENTITY, "");
 
 typedef struct _desc_t {
   node_id_t root;
@@ -178,7 +176,7 @@ btree_val_t btree_get(btree_t bt, btree_key_t key) {
   }
 
   // Return value
-  return (slot < DEGREE && key == node_buf.keys[slot]) ?
+  return (slot < BT_DEGREE && key == node_buf.keys[slot]) ?
     node_buf.arr.leaf.values[slot] : BTREE_NOVAL;
 }
 
@@ -199,14 +197,14 @@ void btree_scan(btree_t bt, btree_key_t *keys,
   }
 
   // Edge case
-  if (range_scan && !(slot < DEGREE)) {
+  if (range_scan && !(slot < BT_DEGREE)) {
     node_id = node_buf.arr.leaf.next;
     node_read(&node_buf, node_id);
     slot = node_traverse(&node_buf, keys[0]);
   }
 
   // No value found
-  if (!(slot < DEGREE) ||
+  if (!(slot < BT_DEGREE) ||
         // range: no key in (key[0], key[1])
       (range_scan ? (node_buf.keys[slot] > keys[1])
         // !range: no key matches key[0]
@@ -236,8 +234,8 @@ void btree_scan(btree_t bt, btree_key_t *keys,
 }
 
 btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
-  node_id_t node_stack[MAX_DEPTH];
-  uint16_t slot_stack[MAX_DEPTH];
+  node_id_t node_stack[BT_MAX_DEPTH];
+  uint16_t slot_stack[BT_MAX_DEPTH];
   int16_t unlocked_depth = -1;
   __dma_aligned node_t node_buf, new_node_buf;
   node_id_t node_id, new_node_id;
@@ -264,7 +262,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
   while (true) {
     node_stack[depth] = node_id;
     node_read(&node_buf, node_id);
-    if (node_buf.num_keys < DEGREE) {
+    if (node_buf.num_keys < BT_DEGREE) {
       for (int16_t d = depth - 1; d > unlocked_depth; --d) {
         node_unlock(node_stack[d]);
       }
@@ -278,7 +276,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
     node_lock(node_id);
   }
   const int16_t max_depth = depth;
-  assert_print(max_depth < MAX_DEPTH);
+  assert_print(max_depth < BT_MAX_DEPTH);
 
   // Insert to leaf
   if (!allow_duplicates && slot < node_buf.num_keys && node_buf.keys[slot] == key) {
@@ -287,7 +285,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
   }
   split_node = node_id_null;
   insert_done = false;
-  if (node_buf.num_keys == DEGREE) {
+  if (node_buf.num_keys == BT_DEGREE) {
     // Leaf node is full, split
     new_node_buf.num_keys = DEGREE_RIGHT;
     new_node_buf.is_leaf = true;
@@ -321,7 +319,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
     node_id = node_stack[depth];
     node_read(&node_buf, node_id);
     slot = slot_stack[depth];
-    if (node_buf.num_keys == DEGREE) {
+    if (node_buf.num_keys == BT_DEGREE) {
       // Inner node is full, split
       new_node_buf.num_keys = DEGREE_RIGHT;
       new_node_buf.is_leaf = false;

@@ -7,7 +7,6 @@
 #include <stddef.h>
 
 /* Configs */
-#define VERSION_ALLOCATOR_SIZE_BITS (18)
 #define VERSION_ALLOCATOR_SIZE (1UL << VERSION_ALLOCATOR_SIZE_BITS)
 #define VERSION_ACCESS_MUTEX_NUM (16)
 
@@ -48,6 +47,7 @@ typedef union _version_t {
 } version_t;
 static_assert(sizeof(version_t) % 8 == 0, "");
 static_assert(sizeof(struct _version_freeptr) == 8, "");
+static_assert(sizeof(version_t) == __VERSION_ALLOCATOR_SIZEOF_ENTITY, "");
 
 #define SECONDARY_OID_TO_VID(oid) ((oid) & 0x7FFFFFFFUL)
 #define SECONDARY_VID_TO_OID(vid) ((vid) | 0x80000000UL)

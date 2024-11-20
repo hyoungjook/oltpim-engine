@@ -6,7 +6,6 @@
 #include <stddef.h>
 
 /* Configs */
-#define OID_ARRAY_SIZE_BITS (16)
 #define OID_ARRAY_SIZE (1UL << OID_ARRAY_SIZE_BITS)
 #define MAX_OID (OID_ARRAY_SIZE - 1)
 
@@ -24,10 +23,15 @@ static inline oid_value_t oid_array_read(oid_t oid) {
   return oid_buf[oid & 0x1];
 }
 
-static inline void oid_array_write(oid_t oid, oid_value_t val) {
-  mram_read(&oid_array[oid & (~0x1)], &oid_buf, 8);
+static inline void oid_array_write_after_read(oid_t oid, oid_value_t val) {
+  // assume oid_array_read(oid) is called and oid_buf is filled
   oid_buf[oid & 0x1] = val;
   mram_write(&oid_buf, &oid_array[oid & (~0x1)], 8);
+}
+
+static inline void oid_array_write(oid_t oid, oid_value_t val) {
+  oid_array_read(oid);
+  oid_array_write_after_read(oid, val);
 }
 
 /* Functions */
@@ -83,8 +87,7 @@ bool oid_compare_exchange(oid_t oid, oid_value_t *old_val, oid_value_t new_val) 
   oid_value_t val = oid_array_read(oid);
   bool succeed = (val == *old_val);
   if (succeed) {
-    // TODO perf opt, remove double read here
-    oid_array_write(oid, new_val);
+    oid_array_write_after_read(oid, new_val);
   }
   else {
     *old_val = val;
