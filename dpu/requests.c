@@ -27,26 +27,24 @@ void process_init_global() {
 }
 
 #define DECLARE_REQUEST_FUNC(_1, name, _2, _3, _4, _5, _6, ...) \
-static inline void process_##name(args_##name##_t *args, rets_##name##_t *rets, __mram_ptr uint8_t *mrets);
+static inline void process_##name(args_##name##_t *args, __mram_ptr uint8_t *mrets);
 
 REQUEST_TYPES_LIST(DECLARE_REQUEST_FUNC)
 
 #undef DECLARE_REQUEST_FUNC
 
-void process_request(request_type_t request_type, args_any_t *args, rets_any_t *rets,
-    __mram_ptr uint8_t *mrets) {
+void process_request(request_type_t request_type, args_any_t *args, __mram_ptr uint8_t *mrets) {
   #define case_process_request(name) \
-  process_##name(&args->name, &rets->name, mrets);
-
+  process_##name(&args->name, mrets);
   REQUEST_SWITCH_CASE(request_type, case_process_request)
-
   #undef case_process_request
 }
 
 static_assert(sizeof(btree_val_t) == sizeof(oid_t), "");
 
-static inline void process_insert(args_insert_t *args, rets_insert_t *rets, __mram_ptr uint8_t *_) {
+static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets) {
   assert_print(args->index_id < NUM_INDEXES);
+  __dma_aligned rets_insert_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = true; // default, if btree_insert succeeds
   // Allocate object
@@ -77,12 +75,14 @@ static inline void process_insert(args_insert_t *args, rets_insert_t *rets, __mr
     wset_add(args->xid, oid);
   }
   // return
-  rets->oid = oid;
-  rets->status = status;
+  rets.oid = oid;
+  rets.status = status;
+  mram_write(&rets, mrets, sizeof(rets_insert_t));
 }
 
-static inline void process_get(args_get_t *args, rets_get_t *rets, __mram_ptr uint8_t *_) {
+static inline void process_get(args_get_t *args, __mram_ptr uint8_t *mrets) {
   assert_print(args->index_id < NUM_INDEXES);
+  __dma_aligned rets_get_t rets;
   status_t status = STATUS_FAILED;
   // query btree
   oid_t oid;
@@ -93,35 +93,40 @@ static inline void process_get(args_get_t *args, rets_get_t *rets, __mram_ptr ui
   else {
     oid = btree_get(index_trees[args->index_id], args->key);
   }
-  if (oid != BTREE_NOVAL && object_read(oid, args->xid, args->csn, &rets->value)) {
+
+  if (oid != BTREE_NOVAL && object_read(oid, args->xid, args->csn, &rets.value)) {
     status = STATUS_SUCCESS;
   }
   // return
-  rets->status = status;
+  rets.status = status;
+  mram_write(&rets, mrets, sizeof(rets_get_t));
 }
 
-static inline void process_update(args_update_t *args, rets_update_t *rets, __mram_ptr uint8_t *_) {
+static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets) {
   assert_print(args->index_id < NUM_INDEXES);
   assert_print(INDEX_INFOS[args->index_id].primary);
+  __dma_aligned rets_update_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
   oid_t oid = btree_get(index_trees[args->index_id], args->key);
   if (oid != BTREE_NOVAL) {
     status = object_update(oid, args->xid, args->csn, args->new_value,
-      &rets->old_value, false, &add_to_write_set);
+      &rets.old_value, false, &add_to_write_set);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
     wset_add(args->xid, oid);
   }
   // return
-  rets->oid = oid;
-  rets->status = status;
+  rets.oid = oid;
+  rets.status = status;
+  mram_write(&rets, mrets, sizeof(rets_update_t));
 }
 
-static inline void process_remove(args_remove_t *args, rets_remove_t *rets, __mram_ptr uint8_t *_) {
+static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets) {
   assert_print(args->index_id < NUM_INDEXES);
   assert_print(INDEX_INFOS[args->index_id].primary);
+  __dma_aligned rets_remove_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
@@ -133,8 +138,9 @@ static inline void process_remove(args_remove_t *args, rets_remove_t *rets, __mr
     wset_add(args->xid, oid);
   }
   // return
-  rets->oid = oid;
-  rets->status = status;
+  rets.oid = oid;
+  rets.status = status;
+  mram_write(&rets, mrets, sizeof(rets_remove_t));
 }
 
 typedef struct _scan_callback_args {
@@ -160,7 +166,7 @@ static bool scan_callback(oid_t oid, void *args) {
   return true;
 }
 
-static inline void process_scan(args_scan_t *args, rets_scan_t *rets, __mram_ptr uint8_t *mrets) {
+static inline void process_scan(args_scan_t *args, __mram_ptr uint8_t *mrets) {
   assert_print(args->index_id < NUM_INDEXES);
   assert_print(args->keys[0] <= args->keys[1]);
   scan_callback_args scan_args;
@@ -172,8 +178,10 @@ static inline void process_scan(args_scan_t *args, rets_scan_t *rets, __mram_ptr
   scan_args.status = STATUS_FAILED;
   // query btree
   btree_scan(index_trees[args->index_id], (uint64_t*)&args->keys, scan_callback, &scan_args);
-  rets->status = scan_args.status;
-  rets->outs = scan_args.outs;
+  __dma_aligned rets_scan_t rets;
+  rets.status = scan_args.status;
+  rets.outs = scan_args.outs;
+  mram_write(&rets, mrets, sizeof(rets_scan_t));
 }
 
 typedef struct _finalize_arg {
@@ -186,7 +194,7 @@ static void finalize_callback(oid_t oid, void *arg) {
   object_finalize(oid, a->xid, a->csn, a->commit);
 }
 
-static inline void process_commit(args_commit_t *args, rets_commit_t *rets, __mram_ptr uint8_t *_) {
+static inline void process_commit(args_commit_t *args, __mram_ptr uint8_t *_) {
   finalize_arg arg;
   arg.xid = args->xid;
   arg.csn = args->csn;
@@ -194,7 +202,7 @@ static inline void process_commit(args_commit_t *args, rets_commit_t *rets, __mr
   wset_traverse_remove(args->xid, finalize_callback, &arg);
 }
 
-static inline void process_abort(args_abort_t *args, rets_abort_t *rets, __mram_ptr uint8_t *_) {
+static inline void process_abort(args_abort_t *args, __mram_ptr uint8_t *_) {
   finalize_arg arg;
   arg.xid = args->xid;
   // csn not used

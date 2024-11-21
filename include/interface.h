@@ -116,6 +116,7 @@ _(6, abort, 0,                      \
   , 8, -8, __VA_ARGS__)             \
 
 #define NUM_PRIORITIES 2
+#define REQUEST_MAX_ARGS_SIZE 40
 
 /* Secondary index value */
 #define SVALUE_MAKE(pim_id, oid) (((uint64_t)(pim_id) << 32) | ((uint64_t)(oid)))
@@ -131,6 +132,7 @@ _(6, abort, 0,                      \
     args_struct                               \
   } args_##name##_t;                          \
   static_assert(sizeof(args_##name##_t) == args_size, ""); \
+  static_assert(sizeof(args_##name##_t) <= REQUEST_MAX_ARGS_SIZE, ""); \
                                               \
   typedef struct _rets_##name##_t {           \
     rets_struct                               \
