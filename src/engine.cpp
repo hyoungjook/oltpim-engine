@@ -30,9 +30,15 @@ void rank_buffer::alloc(int num_dpus, buf_alloc_fn alloc_fn) {
     };
   }
 
+  auto aligned_alloc_fn = [&](size_t align, size_t size) -> void* {
+    uintptr_t underlying = (uintptr_t)alloc_fn(size + align);
+    underlying = (underlying + align - 1) / align * align;
+    return (void*)underlying;
+  };
+
   bufs = (uint8_t**)malloc(sizeof(uint8_t*) * num_dpus);
   for (int each_dpu = 0; each_dpu < num_dpus; ++each_dpu) {
-    bufs[each_dpu] = (uint8_t*)alloc_fn(DPU_BUFFER_SIZE);
+    bufs[each_dpu] = (uint8_t*)aligned_alloc_fn(CACHE_LINE, DPU_BUFFER_SIZE);
   }
   offsets = (uint32_t*)malloc(sizeof(uint32_t) * num_dpus);
   reset_offsets();
