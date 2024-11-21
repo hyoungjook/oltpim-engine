@@ -46,7 +46,6 @@ typedef uint8_t status_t;
  * @param rets_size in plain number, should be multiple of 8
  * @param rets_size_supp adds to rets_size, using second uint8 member
  *      in args_struct. Use "__rn" to refer the second member.
- * @param rets_size_rn_required whether rets_size_supp contains "__rn"
  */
 #define REQUEST_TYPES_LIST(_, ...)  \
 _(0, insert, 0,                     \
@@ -59,7 +58,7 @@ _(0, insert, 0,                     \
     uint32_t oid;                   \
     uint8_t status;                 \
     uint8_t pad[3];                 \
-  , 8, 0, 0, __VA_ARGS__)           \
+  , 8, 0, __VA_ARGS__)              \
 _(1, get, 1,                        \
     uint64_t key;                   \
     uint64_t xid;                   \
@@ -69,7 +68,7 @@ _(1, get, 1,                        \
   , 32,                             \
     uint64_t value;                 \
     uint8_t status;                 \
-  , 16, 0, 0, __VA_ARGS__)          \
+  , 16, 0, __VA_ARGS__)             \
 _(2, update, 1,                     \
     uint64_t key;                   \
     uint64_t new_value;             \
@@ -80,7 +79,7 @@ _(2, update, 1,                     \
     uint64_t old_value;             \
     uint32_t oid;                   \
     uint8_t status;                 \
-  , 16, 0, 0, __VA_ARGS__)          \
+  , 16, 0, __VA_ARGS__)             \
 _(3, remove, 1,                     \
     uint64_t key;                   \
     uint64_t xid;                   \
@@ -90,7 +89,7 @@ _(3, remove, 1,                     \
     uint32_t oid;                   \
     uint8_t status;                 \
     uint8_t pad[3];                 \
-  , 8, 0, 0, __VA_ARGS__)           \
+  , 8, 0, __VA_ARGS__)              \
 _(4, scan, 1,                       \
     uint8_t max_outs;               \
     uint8_t index_id;               \
@@ -103,18 +102,18 @@ _(4, scan, 1,                       \
     uint8_t outs;                   \
     uint8_t pad[6];                 \
     uint64_t values[0];             \
-  , 8, 8 * (__rn), 1, __VA_ARGS__)  \
+  , 8, 8 * (__rn), __VA_ARGS__)     \
 _(5, commit, 0,                     \
     uint64_t xid;                   \
     uint64_t csn;                   \
   , 16,                             \
     uint64_t pad;                   \
-  , 8, -8, 0, __VA_ARGS__)          \
+  , 8, -8, __VA_ARGS__)             \
 _(6, abort, 0,                      \
     uint64_t xid;                   \
   , 8,                              \
     uint64_t pad;                   \
-  , 8, -8, 0, __VA_ARGS__)          \
+  , 8, -8, __VA_ARGS__)             \
 
 #define NUM_PRIORITIES 2
 #define REQUEST_MAX_ARGS_SIZE 40
@@ -172,7 +171,7 @@ REQUEST_TYPES_LIST(RETS_UNION_MEMBERS)
 } rets_any_t;
 
 
-#define _REQUEST_SWITCH_CASE_HELPER(_1, name, _2, _3, _4, _5, _6, _7, _8, user_macro) \
+#define _REQUEST_SWITCH_CASE_HELPER(_1, name, _2, _3, _4, _5, _6, _7, user_macro) \
 case request_type_##name: { \
   user_macro(name) \
 } break;
