@@ -306,7 +306,6 @@ int engine::add_index(index_info info) {
 void engine::init(config conf) {
   assert(!_initialized);
   _initialized = true;
-  _numa_ignore = false;
 
   // Information
   rank_engine::information rank_info;
@@ -392,6 +391,7 @@ void engine::init(config conf) {
     _rank_buffers[each_rank].alloc(num_dpus_this_rank);
     _num_dpus += num_dpus_this_rank;
     _num_dpus_per_rank[each_rank] = num_dpus_this_rank;
+    assert(num_dpus_this_rank <= 255); // ensure dpu_id is uint8_t
     _numa_id_to_rank_ids[re.get_rank().numa_node()].push_back(each_rank);
   }
 
@@ -410,67 +410,31 @@ int engine::get_worker_thread_core_id() {
 void engine::push(int pim_id, request *req) {
   assert(_initialized && sys_core_id >= 0);
   // Push to the rank engine
-  int rank_id = 0, dpu_id = 0;
-  pim_id_to_rank_dpu_id(pim_id, rank_id, dpu_id);
-  req->dpu_id = dpu_id;
+  pim_id_to_rank_dpu_id(pim_id, req->rank_id, req->dpu_id);
   req->done = false;
-  _rank_engines[rank_id].push(req);
+  _rank_engines[req->rank_id].push(req);
 }
 
 bool engine::is_done(request *req) {
   assert(_initialized);
   if (req->done) return true;
-  // Process this numa node's rank
-  process_local_numa_rank();
-  if (_numa_ignore) {
-    process_all_ranks();
-  }
+  _rank_engines[req->rank_id].process();
   return req->done;
 }
 
-void engine::drain_all() {
-  assert(_initialized);
-  while (true) {
-    bool something_exists = process_local_numa_rank();
-    if (!something_exists) {
-      sleep(1);
-      something_exists = process_local_numa_rank();
-      if (!something_exists) break;
-    }
-  }
-}
-
-void engine::pim_id_to_rank_dpu_id(int pim_id, int &rank_id, int &dpu_id) {
+void engine::pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_id) {
   assert(0 <= pim_id && pim_id < _num_dpus);
   int dpu_cnt = 0;
-  for (rank_id = 0; rank_id < _num_ranks; ++rank_id) {
-    int num_dpus_this_rank = _num_dpus_per_rank[rank_id];
+  for (int r = 0; r < _num_ranks; ++r) {
+    int num_dpus_this_rank = _num_dpus_per_rank[r];
     if (pim_id < dpu_cnt + num_dpus_this_rank) {
-      dpu_id = pim_id - dpu_cnt;
+      rank_id = (uint16_t)r;
+      dpu_id = (uint8_t)(pim_id - dpu_cnt);
       return;
     }
     dpu_cnt += num_dpus_this_rank;
   }
   assert(false);
-}
-
-bool engine::process_local_numa_rank() {
-  assert(sys_core_id >= 0);
-  bool something_exists = false;
-  int numa_node_id = numa_node_of_core_id[sys_core_id];
-  // Get ranks of this numa node
-  auto &rank_ids = _numa_id_to_rank_ids[numa_node_id];
-  for (int rank_id: rank_ids) {
-    bool exists = _rank_engines[rank_id].process();
-    something_exists = something_exists || exists;
-  }
-  return something_exists;
-}
-
-void engine::process_all_ranks() {
-  for (auto &re: _rank_engines) {
-    re.process();
-  }
 }
 
 rank_engine::stats engine::get_stats() {

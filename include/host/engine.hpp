@@ -11,7 +11,8 @@ namespace oltpim {
 struct request {
   request *next;      // Used internally
   void *args, *rets;  // User input
-  uint32_t dpu_id;    // Filled internally
+  uint16_t rank_id;   // Filled internally
+  uint8_t dpu_id;     // Filled internally
   uint8_t alen, rlen; // User input
   uint8_t req_type;   // User input
   volatile bool done; // Used internally
@@ -136,15 +137,6 @@ class engine {
   };
   void init(config conf);
 
-  // The oltpim engine processes the requests on the same numa node only.
-  // Hence, if a worker thread submits a request to the pim module
-  // which is handled by a thread in another numa node and that thread
-  // is already terminated, the request will never be serviced.
-  // *numa_ignore* avoids this problem by allowing threads to serve
-  // requests in different numa node. It will slow down the performance,
-  // so it should be only used for wrapups after the measurement.
-  void set_numa_ignore(bool numa_ignore) {_numa_ignore = numa_ignore;}
-
   void register_worker_thread(int sys_core_id);
   int get_worker_thread_core_id();
 
@@ -152,7 +144,6 @@ class engine {
   // pending requests.
   void push(int pim_id, request *req);
   bool is_done(request *req);
-  void drain_all();
 
   inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id].get_rank();}
   inline int num_pims() {return _num_dpus;}
@@ -162,7 +153,6 @@ class engine {
  private:
   engine();
   bool _initialized;
-  bool _numa_ignore;
   // used before initialization
   std::vector<index_info> _index_infos;
 
@@ -179,12 +169,10 @@ class engine {
   // Structures for pim_id -> (rank_id, dpu_id)
   int _num_dpus;
   std::vector<int> _num_dpus_per_rank;
-  inline void pim_id_to_rank_dpu_id(int pim_id, int &rank_id, int &dpu_id);
+  inline void pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_id);
 
   // Structures for numa_node_id -> [rank_id]s
   std::vector<std::vector<int>> _numa_id_to_rank_ids;
-  bool process_local_numa_rank();
-  void process_all_ranks();
 
   // Structrues for core_id -> numa_node_id
   static std::vector<int> numa_node_of_core_id;

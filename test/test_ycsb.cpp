@@ -468,7 +468,6 @@ int main(int argc, char *argv[]) {
         if (!init_coros.step()) break;
         if (done) break;
       }
-      engine.drain_all();
     }
 
     // barrier
@@ -481,7 +480,6 @@ int main(int argc, char *argv[]) {
         test_coros.step();
         if (done) break;
       }
-      engine.drain_all();
     }
   };
 
