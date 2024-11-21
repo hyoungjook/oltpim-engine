@@ -25,11 +25,30 @@ uint32_t args_offset, args_total_offset;
 __mram_ptr uint8_t *rets_ptr;
 uint8_t priority_frontier;
 
+// Whether retsnum is required
+#define declare_rn_required(_1, _2, _3, _4, _5, _6, _7, _8, rets_size_rn_required, ...) \
+  rets_size_rn_required,
+static const bool request_ret_size_rn_required[] = {
+  REQUEST_TYPES_LIST(declare_rn_required)
+};
+#undef declare_rn_required
+
 static inline uint8_t *args_read_type(
     __mram_ptr uint8_t *argp, uint8_t *cache, uint32_t modulo) {
-  // Fetch 2B at argp[modulo]
+  // Fetch 1B at argp[modulo]
   // modulo = (argp % 8)
-  mram_read(&argp[-modulo], cache, (modulo == 7) ? 16 : 8);
+  mram_read(&argp[-modulo], cache, 8);
+
+  // Optionally fetch the retnum (additional 1B)
+  // Only fetch the second in critical mutex section
+  // if it's really required: 
+  // (1) it's not fetched from args_read_type (modulo == 7)
+  // (2) it is required (request type)
+  const uint8_t type = cache[modulo];
+  if (modulo == 7 && request_ret_size_rn_required[type]) {
+    mram_read(&argp[1], &cache[8], 8);
+  }
+
   return &cache[modulo];
 }
 
@@ -38,7 +57,7 @@ static inline void args_read_content(
     uint32_t modulo, uint32_t args_size) {
   // Assume args_read_type() is already called and part of cache is filled up.
   #define ROUNDUP8(x) (((x) + 7) & (~7))
-  if (modulo == 7)
+  if (modulo == 7 && request_ret_size_rn_required[cache[modulo]])
     mram_read(&argp[9], &cache[16], ROUNDUP8(args_size - 8));
   else
     mram_read(&argp[8 - modulo], &cache[8], ROUNDUP8(args_size - (7 - modulo)));
