@@ -175,6 +175,7 @@ bool rank_engine::process() {
       if (something_exists) {
         #ifndef NSTATS
         const auto __t0 = oltpim::now_us();
+        uint64_t __nr = 0;
         #endif
         // Construct buffer
         _buffer.reset_offsets();
@@ -196,6 +197,9 @@ bool rank_engine::process() {
                 *req_ptr = req->next;
                 __atomic_store_1(&req->done, true, __ATOMIC_RELEASE);
               }
+              #ifndef NSTATS
+              ++__nr;
+              #endif
             }
           }
           // Insert separator
@@ -215,15 +219,16 @@ bool rank_engine::process() {
 
         // Copy args to rank
         #ifndef NSTATS
+        stat[stats::CNTR::NUM_REQUESTS] += __nr;
         const auto __t1 = oltpim::now_us();
-        stat[stats::CNTR_PREP1_US] += (__t1 - __t0);
+        stat[stats::CNTR::PREP1_US] += (__t1 - __t0);
         #endif
         _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, max_alength, true);
 
         // Launch
         #ifndef NSTATS
         __launch_start_us = oltpim::now_us();
-        stat[stats::CNTR_COPY1_US] += (__launch_start_us - __t1);
+        stat[stats::CNTR::COPY1_US] += (__launch_start_us - __t1);
         #endif
         _rank.launch(true);
 
@@ -247,14 +252,14 @@ bool rank_engine::process() {
       if (pim_done) {
         #ifndef NSTATS
         const auto __t2 = oltpim::now_us();
-        stat[stats::CNTR_LAUNCH_US] += (__t2 - __launch_start_us);
+        stat[stats::CNTR::LAUNCH_US] += (__t2 - __launch_start_us);
         #endif
         //_rank.log_read(stdout); // debug
         // Copy rets from rank
         _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, _max_rlength, false);
         #ifndef NSTATS
         const auto __t3 = oltpim::now_us();
-        stat[stats::CNTR_COPY2_US] += (__t3 - __t2);
+        stat[stats::CNTR::COPY2_US] += (__t3 - __t2);
         #endif
 
         // Distribute results: the traversal order should be the same as construction
@@ -274,8 +279,8 @@ bool rank_engine::process() {
         something_exists = true;
         #ifndef NSTATS
         const auto __t4 = oltpim::now_us();
-        stat[stats::CNTR_PREP2_US] += (__t4 - __t3);
-        ++stat[stats::CNTR_NUM_ROUNDS];
+        stat[stats::CNTR::PREP2_US] += (__t4 - __t3);
+        ++stat[stats::CNTR::NUM_ROUNDS];
         #endif
       }
     }

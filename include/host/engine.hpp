@@ -103,13 +103,17 @@ class rank_engine {
 public:
   // Statistics
   struct stats {
-    static constexpr int CNTR_NUM_ROUNDS = 0;
-    static constexpr int CNTR_LAUNCH_US = 1;
-    static constexpr int CNTR_PREP1_US = 2;
-    static constexpr int CNTR_COPY1_US = 3;
-    static constexpr int CNTR_COPY2_US = 4;
-    static constexpr int CNTR_PREP2_US = 5;
-    static constexpr int NUM_COUNTERS = 6;
+    enum CNTR: int {
+      NUM_ROUNDS,
+      NUM_REQUESTS,
+      LAUNCH_US,
+      PREP1_US,
+      COPY1_US,
+      COPY2_US,
+      PREP2_US,
+      NUM_CNTRS
+    };
+    static constexpr int NUM_COUNTERS = CNTR::NUM_CNTRS;
     uint64_t cnt[NUM_COUNTERS] = {0,};
     uint64_t &operator[](int idx) {return cnt[idx];}
     stats &operator+=(const stats &other) {for (int i = 0; i < NUM_COUNTERS; ++i) cnt[i] += other.cnt[i]; return *this;}
