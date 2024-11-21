@@ -490,7 +490,8 @@ int main(int argc, char *argv[]) {
     auto start_time = std::chrono::system_clock::now();
     auto last_time = start_time;
     counter last_counter;
-    printf("sec:commits,fails,conflicts,CommitTPS,TotalTPS\n");
+    oltpim::rank_engine::stats last_stat;
+    printf("sec:commits,fails,conflicts,CommitTPS,TotalTPS;engine_stats\n");
     for (int i = 0; i < seconds; ++i) {
       sleep(1);
       auto curr_time = std::chrono::system_clock::now();
@@ -503,16 +504,19 @@ int main(int argc, char *argv[]) {
       for (int core_id: core_list) {
         curr_counter += counters[core_id];
       }
+      auto curr_stat = oltpim::engine::g_engine.get_stats();
 
       // diff
       counter sec_counter = curr_counter - last_counter;
       last_counter = curr_counter;
       double commit_tps = (double)sec_counter.commits / real_sec;
       double total_tps = (double)sec_counter.total() / real_sec;
+      auto sec_stat = curr_stat - last_stat;
+      last_stat = curr_stat;
 
-      printf("%lf:%lu,%lu,%lu,%lf,%lf\n", 
+      printf("%lf:%lu,%lu,%lu,%lf,%lf;%s\n", 
         curr_sec, sec_counter.commits, sec_counter.fails, sec_counter.conflicts, 
-        commit_tps, total_tps);
+        commit_tps, total_tps, sec_stat.to_string().c_str());
     }
     done = true;
   };

@@ -99,6 +99,26 @@ class rank_engine {
   // Process locks
   std::atomic<bool> _process_lock;
   int _process_phase;
+
+public:
+  // Statistics
+  struct stats {
+    static constexpr int CNTR_NUM_ROUNDS = 0;
+    static constexpr int CNTR_LAUNCH_US = 1;
+    static constexpr int CNTR_PREP1_US = 2;
+    static constexpr int CNTR_COPY1_US = 3;
+    static constexpr int CNTR_COPY2_US = 4;
+    static constexpr int CNTR_PREP2_US = 5;
+    static constexpr int NUM_COUNTERS = 6;
+    uint64_t cnt[NUM_COUNTERS] = {0,};
+    uint64_t &operator[](int idx) {return cnt[idx];}
+    stats &operator+=(const stats &other) {for (int i = 0; i < NUM_COUNTERS; ++i) cnt[i] += other.cnt[i]; return *this;}
+    stats &operator/=(int div) {for (int i = 0; i < NUM_COUNTERS; ++i) cnt[i] /= div; return *this;}
+    stats operator-(const stats &other) const {stats s; for (int i = 0; i < NUM_COUNTERS; ++i) s.cnt[i] = cnt[i] - other.cnt[i]; return s;}
+    std::string to_string() {std::string s; for (int i = 0; i < NUM_COUNTERS; ++i) s += (std::to_string(cnt[i]) + ","); return s;}
+  } stat;
+private:
+  uint64_t __launch_start_us;
 };
 
 class engine {
@@ -132,6 +152,8 @@ class engine {
 
   inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id].get_rank();}
   inline int num_pims() {return _num_dpus;}
+
+  rank_engine::stats get_stats();
 
  private:
   engine();
