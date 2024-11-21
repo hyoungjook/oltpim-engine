@@ -22,8 +22,9 @@ struct request {
 };
 
 struct rank_buffer {
+  using buf_alloc_fn = void*(*)(size_t);
   rank_buffer() {}
-  void alloc(int num_dpus);
+  void alloc(int num_dpus, buf_alloc_fn alloc_fn);
   ~rank_buffer();
 
   inline void reset_offsets();
@@ -57,6 +58,7 @@ class rank_engine {
     void *dpu_rank;
     uint32_t num_indexes;
     index_info index_infos[DPU_MAX_NUM_INDEXES];
+    rank_buffer::buf_alloc_fn alloc_fn;
   };
   struct information { // info passed from parent engine
     int rank_id;
@@ -134,6 +136,7 @@ class engine {
   int add_index(index_info info);
   struct config {
     int num_ranks_per_numa_node;
+    rank_buffer::buf_alloc_fn alloc_fn;
   };
   void init(config conf);
 

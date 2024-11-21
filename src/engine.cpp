@@ -22,13 +22,17 @@ REQUEST_TYPES_LIST(REQUEST_TYPE_PRIORITY)
 #undef REQUEST_TYPE_PRIORITY
 };
 
-void rank_buffer::alloc(int num_dpus) {
+void rank_buffer::alloc(int num_dpus, buf_alloc_fn alloc_fn) {
   _num_dpus = num_dpus;
+  if (!alloc_fn) {
+    alloc_fn = [](size_t size) -> void* {
+      return (void*)aligned_alloc(CACHE_LINE, size);
+    };
+  }
+
   bufs = (uint8_t**)malloc(sizeof(uint8_t*) * num_dpus);
   for (int each_dpu = 0; each_dpu < num_dpus; ++each_dpu) {
-    bufs[each_dpu] = (uint8_t*)aligned_alloc(
-      CACHE_LINE, DPU_BUFFER_SIZE
-    );
+    bufs[each_dpu] = (uint8_t*)alloc_fn(DPU_BUFFER_SIZE);
   }
   offsets = (uint32_t*)malloc(sizeof(uint32_t) * num_dpus);
   reset_offsets();
@@ -37,7 +41,8 @@ void rank_buffer::alloc(int num_dpus) {
 rank_buffer::~rank_buffer() {
   if (bufs) {
     for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
-      free(bufs[each_dpu]);
+      // skip freeing this; might allocated with external allocator
+      //free(bufs[each_dpu]);
     }
     free(bufs);
   }
@@ -136,7 +141,7 @@ int rank_engine::init(config conf, information info) {
   _request_lists_per_numa_node.alloc(_num_numa_nodes * num_priorities);
 
   // Buffers
-  _buffer.alloc(_num_dpus);
+  _buffer.alloc(_num_dpus, conf.alloc_fn);
   _rets_offset_counter = std::vector<uint32_t>(_num_dpus, 0);
   _reqlists = std::vector<request*>(_num_numa_nodes * num_priorities);
 
@@ -374,7 +379,6 @@ void engine::init(config conf) {
 
   // Allocate rank engines
   _rank_engines = std::vector<rank_engine>(_num_ranks);
-  _rank_buffers = std::vector<rank_buffer>(_num_ranks);
   _num_dpus = 0;
   _num_dpus_per_rank = std::vector<int>(_num_ranks);
   _numa_id_to_rank_ids = std::vector<std::vector<int>>(_num_numa_nodes);
@@ -383,12 +387,12 @@ void engine::init(config conf) {
     rank_config.dpu_rank = dpu_ranks[each_rank];
     rank_config.num_indexes = (uint32_t)_index_infos.size();
     memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
+    rank_config.alloc_fn = conf.alloc_fn;
     auto &re = _rank_engines[each_rank];
     rank_info.rank_id = each_rank;
     int num_dpus_this_rank = re.init(
       rank_config, rank_info
     );
-    _rank_buffers[each_rank].alloc(num_dpus_this_rank);
     _num_dpus += num_dpus_this_rank;
     _num_dpus_per_rank[each_rank] = num_dpus_this_rank;
     assert(num_dpus_this_rank <= 255); // ensure dpu_id is uint8_t
