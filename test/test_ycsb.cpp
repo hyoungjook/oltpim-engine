@@ -10,7 +10,7 @@
 #include <set>
 #include <functional>
 #include "engine.hpp"
-#include "interface.h"
+#include "interface_host.hpp"
 
 //thread_local std::random_device _random_device;
 //thread_local std::mt19937 _rand_gen(_random_device());
@@ -172,7 +172,7 @@ int main(int argc, char *argv[]) {
   std::vector<counter> counters = std::vector<counter>(num_cores);
   volatile bool done = false;
   const uint64_t num_pims = engine.num_pims();
-  const uint64_t scan_length = 8;
+  constexpr uint64_t scan_length = 8;
   auto key_to_pim = [&](uint64_t key) -> int {return (key / 8) % num_pims;};
   std::atomic<uint64_t> g_xid(1), g_csn(1);
   auto get_new_xid = [&]() {return g_xid.fetch_add(1);};
@@ -180,16 +180,13 @@ int main(int argc, char *argv[]) {
   auto get_end_csn = [&]() {return g_csn.fetch_add(1);};
 
   // init txn
-  const uint64_t keys_per_txn = 10;
+  constexpr uint64_t keys_per_txn = 10;
   const int init_batch_size = batch_size;
   auto init_txn = [&](int global_batch_id) -> coro_task {
     const int num_total_batches = init_batch_size * num_threads_per_numa_node * num_numa_nodes;
     const int table_size_per_batch = (table_size + num_total_batches) / num_total_batches;
     const uint64_t start_key = 1 + global_batch_id * table_size_per_batch;
     const uint64_t end_key = 1 + std::min((global_batch_id + 1) * table_size_per_batch, table_size);
-    oltpim::request reqs[keys_per_txn];
-    args_any_t args[keys_per_txn];
-    rets_any_t rets[keys_per_txn];
     const int worker_thd_core_id = oltpim::engine::g_engine.get_worker_thread_core_id();
 
     for (uint64_t key_base = start_key; key_base < end_key; key_base += keys_per_txn) {
@@ -200,51 +197,51 @@ int main(int argc, char *argv[]) {
       std::set<int> touched_pims;
 
       // batch insert
-      for (uint64_t k = 0; k < num_keys; ++k) {
-        uint64_t key = key_base + k;
-        auto &arg = args[k].insert;
-        arg.key = key;
-        arg.value = key + 7;
-        arg.xid = xid;
-        arg.csn = begin_csn;
-        arg.index_id = 0;
-        reqs[k] = oltpim::request(
-          request_type_insert, &args[k], &rets[k], 
-          sizeof(args_insert_t), req_insert_rets_size(&arg)
-        );
-        int pim_id = key_to_pim(key);
-        touched_pims.insert(pim_id);
-        engine.push(pim_id, &reqs[k]);
-      }
-      for (uint64_t k = 0; k < num_keys; ++k) {
-        while (!engine.is_done(&reqs[k])) {
-          co_await std::suspend_always{};
+      {
+        using request_insert = oltpim::request<request_type_insert,args_insert_t,rets_insert_t>;
+        request_insert reqs[keys_per_txn];
+        for (uint64_t k = 0; k < num_keys; ++k) {
+          auto &arg = reqs[k].args;
+          const uint64_t key = key_base + k;
+          arg.key = key;
+          arg.value = key + 7;
+          arg.xid = xid;
+          arg.csn = begin_csn;
+          arg.index_id = 0;
+          int pim_id = key_to_pim(key);
+          touched_pims.insert(pim_id);
+          engine.push(pim_id, (oltpim::request_base*)&reqs[k]);
+        }
+        for (uint64_t k = 0; k < num_keys; ++k) {
+          while (!engine.is_done((oltpim::request_base*)&reqs[k])) {
+            co_await std::suspend_always{};
+          }
+        }
+
+        for (uint64_t k = 0; k < num_keys; ++k) {
+          auto &ret = reqs[k].rets;
+          assert(ret.status == STATUS_SUCCESS);
+          (void)ret;
         }
       }
 
-      for (uint64_t k = 0; k < num_keys; ++k) {
-        auto &ret = rets[k].insert;
-        assert(ret.status == STATUS_SUCCESS);
-        (void)ret;
-      }
-
       // commit
-      uint64_t end_csn = get_end_csn();
-      int cnt = 0;
-      for (int pim_id: touched_pims) {
-        auto &arg = args[cnt].commit;
-        arg.xid = xid;
-        arg.csn = end_csn;
-        reqs[cnt] = oltpim::request(
-          request_type_commit, &args[cnt], &rets[cnt],
-          sizeof(args_commit_t), req_commit_rets_size(&arg)
-        );
-        engine.push(pim_id, &reqs[cnt]);
-        ++cnt;
-      }
-      for (int i = 0; i < cnt; ++i) {
-        while (!engine.is_done(&reqs[i])) {
-          co_await std::suspend_always{};
+      {
+        using request_commit = oltpim::request_norets<request_type_commit,args_commit_t>;
+        request_commit reqs[keys_per_txn];
+        uint64_t end_csn = get_end_csn();
+        int cnt = 0;
+        for (int pim_id: touched_pims) {
+          auto &arg = reqs[cnt].args;
+          arg.xid = xid;
+          arg.csn = end_csn;
+          engine.push(pim_id, (oltpim::request_base*)&reqs[cnt]);
+          ++cnt;
+        }
+        for (int i = 0; i < cnt; ++i) {
+          while (!engine.is_done((oltpim::request_base*)&reqs[i])) {
+            co_await std::suspend_always{};
+          }
         }
       }
 
@@ -268,43 +265,37 @@ int main(int argc, char *argv[]) {
       uint64_t xid = get_new_xid();
       uint64_t begin_csn = get_begin_csn();
 
-      oltpim::request req;
-      args_scan_t args;
-      args.max_outs = scan_length;
-      args.index_id = 0;
-      args.keys[0] = (key / scan_length) * scan_length;
-      args.keys[1] = args.keys[0] + scan_length - 1;
-      args.xid = xid;
-      args.csn = begin_csn;
-      uint32_t rlen = req_scan_rets_size(&args);
-      uint8_t rets_buf[256];
-      assert(rlen <= 256);
-      rets_scan_t *rets = (rets_scan_t*)&rets_buf;
-      req = oltpim::request(
-        request_type_scan, &args, rets,
-        sizeof(args_scan_t), rlen
-      );
-      int pim_id = key_to_pim(args.keys[0]);
-      assert(key_to_pim(args.keys[1]) == pim_id);
-      engine.push(pim_id, &req);
-      while (!engine.is_done(&req)) {
+      using request_scan = oltpim::request<request_type_scan,args_scan_t,rets_scan_ext<scan_length>>;
+      request_scan req;
+      const uint64_t lkey = (key / scan_length) * scan_length;
+      const uint64_t rkey = lkey + scan_length - 1;
+      req.args.max_outs = scan_length;
+      req.args.index_id = 0;
+      req.args.keys[0] = lkey;
+      req.args.keys[1] = rkey;
+      req.args.xid = xid;
+      req.args.csn = begin_csn;
+      int pim_id = key_to_pim(lkey);
+      assert(key_to_pim(rkey) == pim_id);
+      engine.push(pim_id, (oltpim::request_base*)&req);
+      while (!engine.is_done((oltpim::request_base*)&req)) {
         co_await std::suspend_always{};
       }
 
-      int status = rets->status;
+      int status = req.rets.base.status;
       CHECK_VALID_STATUS(status);
       int expected_outs = 0;
-      for (uint64_t key = args.keys[0]; key <= args.keys[1]; ++key) {
+      for (uint64_t key = lkey; key <= rkey; ++key) {
         if (1 <= key && key <= (uint64_t)table_size) {
           if (status == STATUS_SUCCESS) {
-            uint64_t value = rets->values[expected_outs];
+            uint64_t value = req.rets.values[expected_outs];
             assert(value == key + 7 || value == key + 77);
             (void)value;
           }
           ++expected_outs;
         }
       }
-      assert(expected_outs == rets->outs);
+      assert(expected_outs == req.rets.base.outs);
       if (expected_outs == 0) {
         assert(status == STATUS_FAILED);
       }
@@ -316,55 +307,35 @@ int main(int argc, char *argv[]) {
       counters[worker_thd_core_id].increment(status);
     }
     else {
-      oltpim::request reqs[tests_per_txn];
-      args_any_t args[tests_per_txn];
-      rets_any_t rets[tests_per_txn];
-
       // begin
       uint64_t xid = get_new_xid();
       uint64_t begin_csn = get_begin_csn();
       std::set<int> touched_pims;
-
-      for (int i = 0; i < tests_per_txn; ++i) {
-        uint64_t key = rand_key_distr(rg);
-        if (txn_type == txn_type_read) {
-          auto &arg = args[i].get;
+      int status = STATUS_SUCCESS;
+      
+      if (txn_type == txn_type_read) {
+        using request_get = oltpim::request<request_type_get,args_get_t,rets_get_t>;
+        request_get reqs[tests_per_txn];
+        for (int i = 0; i < tests_per_txn; ++i) {
+          uint64_t key = rand_key_distr(rg);
+          auto &arg = reqs[i].args;
           arg.key = key;
           arg.xid = xid;
           arg.csn = begin_csn;
           arg.index_id = 0;
           arg.oid_query = 0;
-          reqs[i] = oltpim::request(
-            request_type_get, &args[i], &rets[i],
-            sizeof(args_get_t), req_get_rets_size(&arg)
-          );
+          int pim_id = key_to_pim(key);
+          touched_pims.insert(pim_id);
+          engine.push(pim_id, (oltpim::request_base*)&reqs[i]);
         }
-        else if (txn_type == txn_type_update) {
-          auto &arg = args[i].update;
-          arg.key = key;
-          arg.xid = xid;
-          arg.csn = begin_csn;
-          arg.new_value = key + 77;
-          arg.index_id = 0;
-          reqs[i] = oltpim::request(
-            request_type_update, &args[i], &rets[i],
-            sizeof(args_update_t), req_update_rets_size(&arg)
-          );
+        for (int i = 0; i < tests_per_txn; ++i) {
+          while (!engine.is_done((oltpim::request_base*)&reqs[i])) {
+            co_await std::suspend_always{};
+          }
         }
-        int pim_id = key_to_pim(key);
-        touched_pims.insert(pim_id);
-        engine.push(pim_id, &reqs[i]);
-      }
-      for (int i = 0; i < tests_per_txn; ++i) {
-        while (!engine.is_done(&reqs[i])) {
-          co_await std::suspend_always{};
-        }
-      }
-      int status = STATUS_SUCCESS;
-      for (int i = 0; i < tests_per_txn; ++i) {
-        if (txn_type == txn_type_read) {
-          uint64_t key = args[i].get.key;
-          auto &ret = rets[i].get;
+        for (int i = 0; i < tests_per_txn; ++i) {
+          uint64_t key = reqs[i].args.key;
+          auto &ret = reqs[i].rets;
 
           // check
           if (key <= (uint64_t)table_size) {
@@ -376,7 +347,6 @@ int main(int argc, char *argv[]) {
           else {
             assert(ret.status != STATUS_SUCCESS);
           }
-
           // status
           if (ret.status == STATUS_FAILED) {
             status = STATUS_FAILED;
@@ -385,9 +355,30 @@ int main(int argc, char *argv[]) {
             status = STATUS_CONFLICT;
           }
         }
-        else if (txn_type == txn_type_update) {
-          uint64_t key = args[i].update.key;
-          auto &ret = rets[i].update;
+      }
+      else if (txn_type == txn_type_update) {
+        using request_update = oltpim::request<request_type_update,args_update_t,rets_update_t>;
+        request_update reqs[tests_per_txn];
+        for (int i = 0; i < tests_per_txn; ++i) {
+          uint64_t key = rand_key_distr(rg);
+          auto &arg = reqs[i].args;
+          arg.key = key;
+          arg.xid = xid;
+          arg.csn = begin_csn;
+          arg.new_value = key + 77;
+          arg.index_id = 0;
+          int pim_id = key_to_pim(key);
+          touched_pims.insert(pim_id);
+          engine.push(pim_id, (oltpim::request_base*)&reqs[i]);
+        }
+        for (int i = 0; i < tests_per_txn; ++i) {
+          while (!engine.is_done((oltpim::request_base*)&reqs[i])) {
+            co_await std::suspend_always{};
+          }
+        }
+        for (int i = 0; i < tests_per_txn; ++i) {
+          uint64_t key = reqs[i].args.key;
+          auto &ret = reqs[i].rets;
 
           // check
           if (key <= (uint64_t)table_size) {
@@ -399,7 +390,6 @@ int main(int argc, char *argv[]) {
           else {
             assert(ret.status != STATUS_SUCCESS);
           }
-
           // status
           if (ret.status == STATUS_FAILED) {
             status = STATUS_FAILED;
@@ -411,32 +401,38 @@ int main(int argc, char *argv[]) {
       }
 
       // commit/abort
-      int cnt = 0;
-      for (int pim_id: touched_pims) {
-        if (status == STATUS_SUCCESS) {
-          uint64_t end_csn = get_end_csn();
-          auto &arg = args[cnt].commit;
+      if (status == STATUS_SUCCESS) {
+        using request_commit = oltpim::request_norets<request_type_commit,args_commit_t>;
+        request_commit reqs[tests_per_txn];
+        int cnt = 0;
+        uint64_t end_csn = get_end_csn();
+        for (int pim_id: touched_pims) {
+          auto &arg = reqs[cnt].args;
           arg.xid = xid;
           arg.csn = end_csn;
-          reqs[cnt] = oltpim::request(
-            request_type_commit, &args[cnt], &rets[cnt],
-            sizeof(args_commit_t), req_commit_rets_size(&arg)
-          );
+          engine.push(pim_id, (oltpim::request_base*)&reqs[cnt]);
+          ++cnt;
         }
-        else {
-          auto &arg = args[cnt].abort;
-          arg.xid = xid;
-          reqs[cnt] = oltpim::request(
-            request_type_abort, &args[cnt], &rets[cnt],
-            sizeof(args_abort_t), req_abort_rets_size(&arg)
-          );
+        for (int i = 0; i < cnt; ++i) {
+          while (!engine.is_done((oltpim::request_base*)&reqs[i])) {
+            co_await std::suspend_always{};
+          }
         }
-        engine.push(pim_id, &reqs[cnt]);
-        ++cnt;
       }
-      for (int i = 0; i < cnt; ++i) {
-        while (!engine.is_done(&reqs[i])) {
-          co_await std::suspend_always{};
+      else {
+        using request_abort = oltpim::request_norets<request_type_abort,args_abort_t>;
+        request_abort reqs[tests_per_txn];
+        int cnt = 0;
+        for (int pim_id: touched_pims) {
+          auto &arg = reqs[cnt].args;
+          arg.xid = xid;
+          engine.push(pim_id, (oltpim::request_base*)&reqs[cnt]);
+          ++cnt;
+        }
+        for (int i = 0; i < cnt; ++i) {
+          while (!engine.is_done((oltpim::request_base*)&reqs[i])) {
+            co_await std::suspend_always{};
+          }
         }
       }
 

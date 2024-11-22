@@ -8,17 +8,35 @@
 
 namespace oltpim {
 
+struct request_base {
+public:
+  request_base *next;     // Used internally
+  uint16_t rank_id;       // Used internally
+  uint8_t dpu_id;         // Used internally
+  volatile bool done;     // Used internally
+  uint8_t req_type;       // USER INPUT
+  uint8_t alen, rlen;     // USER INPUT
+  request_base() {}
+  request_base(uint8_t req_type_, uint8_t alen_, uint8_t rlen_)
+    : done(false), req_type(req_type_), alen(alen_), rlen(rlen_) {}
+  inline void *args() {return (void*)(this + 1);}
+  inline void *rets() {return (void*)(((uint8_t*)(this + 1)) + alen);}
+};
+
+template <request_type_t TYPE, typename arg_t, typename ret_t>
 struct request {
-  request *next;      // Used internally
-  void *args, *rets;  // User input
-  uint16_t rank_id;   // Filled internally
-  uint8_t dpu_id;     // Filled internally
-  uint8_t alen, rlen; // User input
-  uint8_t req_type;   // User input
-  volatile bool done; // Used internally
-  request() {}
-  request(uint8_t req_type_, void *args_, void *rets_, uint8_t alen_, uint8_t rlen_)
-    : args(args_), rets(rets_), alen(alen_), rlen(rlen_), req_type(req_type_) {}
+  request_base meta;
+  arg_t args;
+  ret_t rets;
+  request(): meta(TYPE, sizeof(arg_t), sizeof(ret_t)) {}
+  using _arg_t = arg_t;
+};
+
+template <request_type_t TYPE, typename arg_t>
+struct request_norets {
+  request_base meta;
+  arg_t args;
+  request_norets(): meta(TYPE, sizeof(arg_t), 0) {}
 };
 
 struct rank_buffer {
@@ -30,12 +48,12 @@ struct rank_buffer {
   inline void reset_offsets();
 
   // Constructing the args buffer
-  inline void push_args(request *req);
+  inline void push_args(request_base *req);
   inline void push_priority_separator();
   inline uint32_t finalize_args();
 
   // Distributing the rets buffer
-  inline void pop_rets(request *req);
+  inline void pop_rets(request_base *req);
 
   int _num_dpus;
   uint8_t **bufs = nullptr;
@@ -45,11 +63,11 @@ struct rank_buffer {
 class alignas(CACHE_LINE) request_list {
  public:
   request_list();
-  inline void push(request *req);
-  inline request *move();
+  inline void push(request_base *req);
+  inline request_base *move();
 
  private:
-  std::atomic<request*> _head;
+  std::atomic<request_base*> _head;
 };
 
 class rank_engine {
@@ -71,7 +89,7 @@ class rank_engine {
   int init(config conf, information info);
 
   // Push request, called from the client side
-  inline void push(request *req);
+  inline void push(request_base *req);
 
   // Process requests; if conflict, do nothing
   bool process();
@@ -97,7 +115,7 @@ class rank_engine {
   rank_buffer _buffer;
   std::vector<uint32_t> _rets_offset_counter;
   uint32_t _max_rlength;
-  std::vector<request*> _reqlists;
+  std::vector<request_base*> _reqlists;
 
   // Process locks
   std::atomic<bool> _process_lock;
@@ -145,8 +163,8 @@ class engine {
 
   // push() and is_done() internally processes caller's numa node's
   // pending requests.
-  void push(int pim_id, request *req);
-  bool is_done(request *req);
+  void push(int pim_id, request_base *req);
+  bool is_done(request_base *req);
 
   inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id].get_rank();}
   inline int num_pims() {return _num_dpus;}
@@ -181,7 +199,5 @@ class engine {
   static std::vector<int> numa_node_of_core_id;
 
 };
-
-
 
 }

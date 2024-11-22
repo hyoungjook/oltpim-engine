@@ -61,14 +61,13 @@ void rank_buffer::reset_offsets() {
   memset(offsets, 0, sizeof(uint32_t) * _num_dpus);
 }
 
-void rank_buffer::push_args(request *req) {
-  uint32_t dpu_id = req->dpu_id;
-  uint8_t alen = req->alen;
-  uint8_t req_type = req->req_type;
+void rank_buffer::push_args(request_base *req) {
+  const uint32_t dpu_id = req->dpu_id;
+  const uint8_t alen = req->alen;
   // First sizeof(uint32_t) bytes stores the offset 
   uint8_t *buf = &bufs[dpu_id][sizeof(uint32_t) + offsets[dpu_id]];
-  buf[0] = req_type;
-  memcpy(buf + sizeof(uint8_t), req->args, alen);
+  buf[0] = req->req_type;
+  memcpy(buf + sizeof(uint8_t), req->args(), alen);
   offsets[dpu_id] += (sizeof(uint8_t) + alen);
 }
 
@@ -93,10 +92,10 @@ uint32_t rank_buffer::finalize_args() {
   return sizeof(uint32_t) + max_value;
 }
 
-void rank_buffer::pop_rets(request *req) {
-  uint32_t dpu_id = req->dpu_id;
-  uint8_t rlen = req->rlen;
-  memcpy(req->rets, &bufs[dpu_id][offsets[dpu_id]], rlen);
+void rank_buffer::pop_rets(request_base *req) {
+  const uint32_t dpu_id = req->dpu_id;
+  const uint8_t rlen = req->rlen;
+  memcpy(req->rets(), &bufs[dpu_id][offsets[dpu_id]], rlen);
   offsets[dpu_id] += rlen;
   __atomic_store_1(&req->done, true, __ATOMIC_RELEASE);
 }
@@ -105,9 +104,9 @@ request_list::request_list() {
   _head.store(nullptr);
 }
 
-void request_list::push(request *req) {
+void request_list::push(request_base *req) {
   // assume req is pre-allocated and not released until we set *done
-  request *curr_head = _head.load(std::memory_order_seq_cst);
+  request_base *curr_head = _head.load(std::memory_order_seq_cst);
   do {
     req->next = curr_head;
   } while (
@@ -115,7 +114,7 @@ void request_list::push(request *req) {
   );
 }
 
-request *request_list::move() {
+request_base *request_list::move() {
   // other is not concurrently accessed
   return _head.exchange(nullptr, std::memory_order_seq_cst);
 }
@@ -149,7 +148,7 @@ int rank_engine::init(config conf, information info) {
   // Buffers
   _buffer.alloc(_num_dpus, conf.alloc_fn);
   _rets_offset_counter = std::vector<uint32_t>(_num_dpus, 0);
-  _reqlists = std::vector<request*>(_num_numa_nodes * num_priorities);
+  _reqlists = std::vector<request_base*>(_num_numa_nodes * num_priorities);
 
   // Lock
   _process_lock.store(false);
@@ -159,7 +158,7 @@ int rank_engine::init(config conf, information info) {
   return _num_dpus;
 }
 
-void rank_engine::push(request *req) {
+void rank_engine::push(request_base *req) {
   int numa_node = engine::numa_node_of_core_id[sys_core_id];
   int priority = request_type_priority[req->req_type];
   _request_lists_per_numa_node[numa_node * num_priorities + priority].push(req);
@@ -177,7 +176,7 @@ bool rank_engine::process() {
       // Gather requests to this rank
       for (int priority = 0; priority < num_priorities; ++priority) {
         for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-          request *const reqlist = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
+          request_base *const reqlist = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
           _reqlists[priority * _num_numa_nodes + each_node] = reqlist;
           something_exists = something_exists || (reqlist != nullptr);
         }
@@ -193,8 +192,8 @@ bool rank_engine::process() {
         memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
         for (int priority = 0; priority < num_priorities; ++priority) {
           for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-            request **req_ptr = &_reqlists[priority * _num_numa_nodes + each_node];
-            request *req;
+            request_base **req_ptr = &_reqlists[priority * _num_numa_nodes + each_node];
+            request_base *req;
             while ((req = *req_ptr)) {
               something_exists = true;
               _buffer.push_args(req);
@@ -277,7 +276,7 @@ bool rank_engine::process() {
         _buffer.reset_offsets();
         for (int priority = 0; priority < num_priorities; ++priority) {
           for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-            request *req = _reqlists[priority * _num_numa_nodes + each_node];
+            request_base *req = _reqlists[priority * _num_numa_nodes + each_node];
             while (req) {
               _buffer.pop_rets(req);
               req = req->next;
@@ -417,15 +416,14 @@ int engine::get_worker_thread_core_id() {
   return sys_core_id;
 }
 
-void engine::push(int pim_id, request *req) {
+void engine::push(int pim_id, request_base *req) {
   assert(_initialized && sys_core_id >= 0);
   // Push to the rank engine
   pim_id_to_rank_dpu_id(pim_id, req->rank_id, req->dpu_id);
-  req->done = false;
   _rank_engines[req->rank_id].push(req);
 }
 
-bool engine::is_done(request *req) {
+bool engine::is_done(request_base *req) {
   assert(_initialized);
   if (req->done) return true;
   _rank_engines[req->rank_id].process();
