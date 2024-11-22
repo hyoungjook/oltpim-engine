@@ -166,6 +166,11 @@ class engine {
   void push(int pim_id, request_base *req);
   bool is_done(request_base *req);
 
+  template <typename req_t>
+  inline void push(int pim_id, req_t *req) {push(pim_id, (request_base*)req);}
+  template <typename req_t>
+  inline bool is_done(req_t *req) {return is_done((request_base*)req);}
+
   inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id].get_rank();}
   inline int num_pims() {return _num_dpus;}
 
