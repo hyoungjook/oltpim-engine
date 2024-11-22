@@ -18,7 +18,7 @@ public:
   uint8_t alen, rlen;     // USER INPUT
   request_base() {}
   request_base(uint8_t req_type_, uint8_t alen_, uint8_t rlen_)
-    : done(false), req_type(req_type_), alen(alen_), rlen(rlen_) {}
+    : req_type(req_type_), alen(alen_), rlen(rlen_) {}
   inline void *args() {return (void*)(this + 1);}
   inline void *rets() {return (void*)(((uint8_t*)(this + 1)) + alen);}
 };

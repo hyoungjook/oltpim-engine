@@ -420,6 +420,7 @@ void engine::push(int pim_id, request_base *req) {
   assert(_initialized && sys_core_id >= 0);
   // Push to the rank engine
   pim_id_to_rank_dpu_id(pim_id, req->rank_id, req->dpu_id);
+  req->done = false;
   _rank_engines[req->rank_id].push(req);
 }
 
