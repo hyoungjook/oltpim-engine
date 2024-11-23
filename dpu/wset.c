@@ -67,8 +67,7 @@ static ws_node_id_t ws_node_alloc() {
 
 static void ws_node_free(ws_node_id_t id) {
   mutex_lock(ws_alloc_mutex);
-  ws_node_id_t free_list_second = ws_pool_read_freeptr(ws_free_list_head);
-  ws_pool_write_freeptr(id, free_list_second);
+  ws_pool_write_freeptr(id, ws_free_list_head);
   ws_free_list_head = id;
   mutex_unlock(ws_alloc_mutex);
 }

@@ -63,8 +63,7 @@ oid_t oid_alloc_set(oid_value_t val) {
 void oid_free(oid_t oid) {
   mutex_lock(oid_array_mutex);
   // push to free list
-  oid_value_t free_list_second = oid_array_read(oid_free_list_head);
-  oid_array_write(oid, free_list_second);
+  oid_array_write(oid, oid_free_list_head);
   oid_free_list_head = oid;
   mutex_unlock(oid_array_mutex);
 }

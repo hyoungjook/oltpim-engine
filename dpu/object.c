@@ -56,7 +56,7 @@ static_assert(sizeof(version_t) == __VERSION_ALLOCATOR_SIZEOF_ENTITY, "");
 /* Allocator */
 // version_id_t is the index into the allocator array
 static __mram_noinit version_t ver_alloc_pool[VERSION_ALLOCATOR_SIZE];
-static version_id_t ver_free_list_head;
+static version_id_t ver_free_list_head, ver_free_list_tail;
 // ver_alloc_mutex protects allocation
 // ver_wram_buf is used only under ver_alloc_mutex
 MUTEX_INIT(ver_alloc_mutex);
@@ -80,7 +80,7 @@ static inline void ver_pool_write_freeptr(version_id_t vid, version_id_t ptr) {
 // Should manually mark freeptr.meta.is_free=0 after this
 static version_id_t version_alloc() {
   mutex_lock(ver_alloc_mutex);
-  assert_print(ver_free_list_head != version_id_null); // OOM
+  assert_print(ver_free_list_head != ver_free_list_tail); // OOM
   version_id_t new_free_list_head = ver_pool_read_freeptr(ver_free_list_head);
   version_id_t new_vid = ver_free_list_head;
   ver_free_list_head = new_free_list_head;
@@ -92,9 +92,13 @@ static void version_free(version_id_t vid) {
   // Acquire access lock of ver to prevent reading the object during freeing
   mutex_pool_lock(&ver_access_mutexes, vid);
   mutex_lock(ver_alloc_mutex);
-  version_id_t free_list_second = ver_pool_read_freeptr(ver_free_list_head);
-  ver_pool_write_freeptr(vid, free_list_second);
-  ver_free_list_head = vid;
+  // Append vid to the tail of the free list
+  // to spare some time before vid is reused;
+  // in order to prevent subtle case between
+  // object_finalize()'s abort path and object_read()
+  ver_pool_write_freeptr(ver_free_list_tail, vid);
+  ver_pool_write_freeptr(vid, version_id_null);
+  ver_free_list_tail = vid;
   mutex_unlock(ver_alloc_mutex);
   mutex_pool_unlock(&ver_access_mutexes, vid);
 }
@@ -120,6 +124,7 @@ void object_init_global() {
     ver_pool_write_freeptr(idx, idx + 1);
   }
   ver_free_list_head = 0;
+  ver_free_list_tail = VERSION_ALLOCATOR_SIZE - 1;
 }
 
 oid_t object_create_acquire(xid_t xid, object_value_t new_value, bool primary) {
