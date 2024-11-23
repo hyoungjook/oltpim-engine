@@ -148,7 +148,10 @@ int rank_engine::init(config conf, information info) {
 
   // Request list
   _num_numa_nodes = info.num_numa_nodes;
-  _request_lists_per_numa_node.alloc(_num_numa_nodes * num_priorities);
+  _request_lists_per_numa = std::vector<array<request_list>>(_num_numa_nodes);
+  for (auto &rl: _request_lists_per_numa) {
+    rl.alloc(num_priorities);
+  }
 
   // Buffers
   _buffer.alloc(_num_dpus, conf.alloc_fn);
@@ -167,7 +170,7 @@ int rank_engine::init(config conf, information info) {
 
 void rank_engine::push(request_base *req) {
   int priority = request_type_priority[req->req_type];
-  _request_lists_per_numa_node[my_numa_id * num_priorities + priority].push(req);
+  _request_lists_per_numa[my_numa_id][priority].push(req);
 }
 
 bool rank_engine::process() {
@@ -185,7 +188,7 @@ bool rank_engine::process() {
       bool something_exists = false;
       for (int priority = 0; priority < num_priorities; ++priority) {
         for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-          request_base *req = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
+          request_base *req = _request_lists_per_numa[each_node][priority].move();
           if (req && !something_exists) {
             // lazy buffer initialization
             something_exists = true;

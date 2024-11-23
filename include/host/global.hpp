@@ -43,7 +43,7 @@ class array {
   }
   void alloc(size_t num_elems) {
     _num_elems = num_elems;
-    _arr = (T*)malloc(sizeof(T) * num_elems);
+    _arr = (T*)aligned_alloc(CACHE_LINE, sizeof(T) * num_elems);
     for (size_t each_elem = 0; each_elem < num_elems; ++each_elem) {
       new (&_arr[each_elem]) T();
     }

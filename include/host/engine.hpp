@@ -113,7 +113,7 @@ class rank_engine {
 
   // Request list
   static constexpr int num_priorities = NUM_PRIORITIES;
-  array<request_list> _request_lists_per_numa_node;
+  std::vector<array<request_list>> _request_lists_per_numa;
 
   // PIM buffer
   rank_buffer _buffer;
