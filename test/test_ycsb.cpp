@@ -55,12 +55,12 @@ template <typename F>
 struct coro_scheduler {
 public:
   using handle = std::coroutine_handle<coro_task::promise_type>;
-  coro_scheduler(int num_tasks, F func, int tid_offset, bool repeat)
-    : _num_tasks(num_tasks), _next_task(0), _tid_offset(tid_offset),
-      _repeat(repeat), _func(func), _handles(num_tasks)
+  coro_scheduler(int num_tasks, F func, bool repeat, void *args)
+    : _num_tasks(num_tasks), _next_task(0),
+      _repeat(repeat), _func(func), _args(args), _handles(num_tasks)
    {
     for (int i = 0; i < num_tasks; ++i) {
-      _handles[i] = handle::from_promise(*(_func(tid_offset + i))._p);
+      _handles[i] = handle::from_promise(*(_func(i, _args))._p);
     }
   }
   ~coro_scheduler() {
@@ -80,7 +80,7 @@ public:
         else {
           h.destroy();
           if (_repeat) {
-            h = handle::from_promise(*(_func(_tid_offset + _next_task))._p);
+            h = handle::from_promise(*(_func(_next_task, _args))._p);
             break;
           }
           else {
@@ -95,9 +95,10 @@ public:
     return true;
   }
 private:
-  int _num_tasks, _next_task, _tid_offset;
+  int _num_tasks, _next_task;
   bool _repeat;
   F _func;
+  void *_args;
   std::vector<handle> _handles;
 };
 
@@ -143,7 +144,9 @@ int main(int argc, char *argv[]) {
   engine.add_index(index_info{.primary = true});
   engine.init(oltpim::engine::config{
     .num_ranks_per_numa_node = num_ranks_per_numa_node,
-    .alloc_fn = nullptr
+    .alloc_fn = nullptr,
+    .enable_numa_launch = false,
+    .numa_launch_num_workers_per_numa_node = 0
   });
 
   // Required to pin host threads to cores
@@ -182,12 +185,18 @@ int main(int argc, char *argv[]) {
   // init txn
   constexpr uint64_t keys_per_txn = 10;
   const int init_batch_size = batch_size;
-  auto init_txn = [&](int global_batch_id) -> coro_task {
+  struct init_txn_args {
+    int sys_core_id;
+    int global_batch_offset;
+  };
+  auto init_txn = [&](int batch_id, void *a) -> coro_task {
+    auto *args = (init_txn_args*)a;
+    int global_batch_id = args->global_batch_offset + batch_id;
     const int num_total_batches = init_batch_size * num_threads_per_numa_node * num_numa_nodes;
     const int table_size_per_batch = (table_size + num_total_batches) / num_total_batches;
     const uint64_t start_key = 1 + global_batch_id * table_size_per_batch;
     const uint64_t end_key = 1 + std::min((global_batch_id + 1) * table_size_per_batch, table_size);
-    const int worker_thd_core_id = oltpim::engine::g_engine.get_worker_thread_core_id();
+    const int worker_thd_core_id = args->sys_core_id;
 
     for (uint64_t key_base = start_key; key_base < end_key; key_base += keys_per_txn) {
       uint64_t num_keys = std::min(keys_per_txn, end_key - key_base);
@@ -251,12 +260,16 @@ int main(int argc, char *argv[]) {
   const int tests_per_txn = 10;
   std::uniform_int_distribution<uint64_t> rand_key_distr(1, table_size + 1);
   std::discrete_distribution<int> txn_type_distr({8, 1}); // {read%, update%, scan%}
-  auto test_txn = [&](int batch_id) -> coro_task {
+  struct test_txn_args {
+    int sys_core_id;
+  };
+  auto test_txn = [&](int batch_id, void *a) -> coro_task {
+    auto *args = (test_txn_args*)a;
     static constexpr int txn_type_read = 0;
     static constexpr int txn_type_update = 1;
     static constexpr int txn_type_scan = 2;
     int txn_type = txn_type_distr(rg);
-    const int worker_thd_core_id = oltpim::engine::g_engine.get_worker_thread_core_id();
+    const int worker_thd_core_id = args->sys_core_id;
 
     if (txn_type == txn_type_scan) {
       uint64_t key = rand_key_distr(rg);
@@ -453,7 +466,10 @@ int main(int argc, char *argv[]) {
 
     {
       // initialize
-      coro_scheduler init_coros(init_batch_size, init_txn, tid * init_batch_size, false);
+      init_txn_args args;
+      args.sys_core_id = sys_core_id;
+      args.global_batch_offset = tid * init_batch_size;
+      coro_scheduler init_coros(init_batch_size, init_txn, false, &args);
       while (true) {
         if (!init_coros.step()) break;
         if (done) break;
@@ -465,7 +481,9 @@ int main(int argc, char *argv[]) {
 
     {
       // test
-      coro_scheduler test_coros(batch_size, test_txn, 0, true);
+      test_txn_args args;
+      args.sys_core_id = sys_core_id;
+      coro_scheduler test_coros(batch_size, test_txn, true, &args);
       while (true) {
         test_coros.step();
         if (done) break;

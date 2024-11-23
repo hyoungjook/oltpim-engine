@@ -5,6 +5,7 @@
 #include "global.hpp"
 #include "upmem_rank.hpp"
 #include "interface.h"
+#include "numa_run.hpp"
 
 namespace oltpim {
 
@@ -84,6 +85,8 @@ class rank_engine {
     const char *dpu_binary;
     const char *dpu_args_symbol, *dpu_rets_symbol;
     const char *dpu_num_indexes_symbol, *dpu_index_infos_symbol;
+    bool enable_numa_launch;
+    void *numa_scheduler;
   };
   rank_engine() {}
   int init(config conf, information info);
@@ -121,6 +124,10 @@ class rank_engine {
   std::atomic<bool> _process_lock;
   int _process_phase;
 
+  // numa launch scheduler
+  bool _enable_numa_launch;
+  numa_run::scheduler *_numa_scheduler;
+
 public:
   // Statistics
   struct stats {
@@ -153,13 +160,20 @@ class engine {
   // initialize
   int add_index(index_info info);
   struct config {
+    // PIM ranks per numa node to use.
     int num_ranks_per_numa_node;
+    // allocation function for PIM buffers.
+    // if nullptr, use default malloc.
     rank_buffer::buf_alloc_fn alloc_fn;
+    // whether to use numa-aware launching
+    bool enable_numa_launch;
+    // if enable_numa_launch, number of worker
+    // threads per numa node
+    int numa_launch_num_workers_per_numa_node;
   };
   void init(config conf);
 
   void register_worker_thread(int sys_core_id);
-  int get_worker_thread_core_id();
 
   // push() and is_done() internally processes caller's numa node's
   // pending requests.
@@ -200,9 +214,8 @@ class engine {
   // Structures for numa_node_id -> [rank_id]s
   std::vector<std::vector<int>> _numa_id_to_rank_ids;
 
-  // Structrues for core_id -> numa_node_id
-  static std::vector<int> numa_node_of_core_id;
-
+  // numa launch scheduler
+  std::unique_ptr<numa_run::scheduler> _numa_scheduler;
 };
 
 }

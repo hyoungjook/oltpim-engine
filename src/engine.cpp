@@ -13,7 +13,7 @@
 namespace oltpim {
 
 // physical core id
-static thread_local int sys_core_id = -1;
+static thread_local int my_numa_id = -1;
 
 // Priorities of request type.
 static const int request_type_priority[] = {
@@ -154,14 +154,17 @@ int rank_engine::init(config conf, information info) {
   _process_lock.store(false);
   _process_phase = 0;
 
+  // Numa launch
+  _enable_numa_launch = info.enable_numa_launch;
+  _numa_scheduler = (numa_run::scheduler*)info.numa_scheduler;
+
   // Return number of dpus
   return _num_dpus;
 }
 
 void rank_engine::push(request_base *req) {
-  int numa_node = engine::numa_node_of_core_id[sys_core_id];
   int priority = request_type_priority[req->req_type];
-  _request_lists_per_numa_node[numa_node * num_priorities + priority].push(req);
+  _request_lists_per_numa_node[my_numa_id * num_priorities + priority].push(req);
 }
 
 bool rank_engine::process() {
@@ -195,7 +198,6 @@ bool rank_engine::process() {
             request_base **req_ptr = &_reqlists[priority * _num_numa_nodes + each_node];
             request_base *req;
             while ((req = *req_ptr)) {
-              something_exists = true;
               _buffer.push_args(req);
               if (req->rlen > 0) {
                 // increment rets offset counter
@@ -302,7 +304,6 @@ bool rank_engine::process() {
 }
 
 engine engine::g_engine;
-std::vector<int> engine::numa_node_of_core_id;
 
 engine::engine(): _initialized(false) {}
 
@@ -331,15 +332,6 @@ void engine::init(config conf) {
   _num_ranks_per_numa_node = conf.num_ranks_per_numa_node;
   _num_ranks = _num_ranks_per_numa_node * _num_numa_nodes;
   rank_info.num_numa_nodes = _num_numa_nodes;
-
-  // Core -> Numa shortcut
-  if (numa_node_of_core_id.empty()) {
-    int num_cores = std::thread::hardware_concurrency();
-    numa_node_of_core_id = std::vector<int>(num_cores);
-    for (int core_id = 0; core_id < num_cores; ++core_id) {
-      numa_node_of_core_id[core_id] = numa_node_of_cpu(core_id);
-    }
-  }
 
   // Allocate all physical ranks
   std::vector<void*> dpu_ranks;
@@ -383,6 +375,23 @@ void engine::init(config conf) {
     [](const void *dpu_rank){return dpu_rank == nullptr;}), dpu_ranks.end());
   OLTPIM_ASSERT(dpu_ranks.size() == (size_t)_num_ranks);
 
+  rank_info.enable_numa_launch = conf.enable_numa_launch;
+  if (conf.enable_numa_launch) {
+    if ((size_t)(conf.numa_launch_num_workers_per_numa_node * _num_numa_nodes) >
+        (std::thread::hardware_concurrency() / 2)) {
+      std::cerr << "Too many workers_per_numa_node on numa_scheduler " <<
+                   "will result in cpu oversubscription.\n";
+      std::abort();
+    }
+    // NUMA launch settings
+    _numa_scheduler = std::make_unique<numa_run::scheduler>(
+      conf.numa_launch_num_workers_per_numa_node,
+      // avoid transaction workers on the physical cores
+      std::thread::hardware_concurrency() / 2
+    );
+    rank_info.numa_scheduler = (void*)_numa_scheduler.get();
+  }
+
   // Allocate rank engines
   _rank_engines = std::vector<rank_engine>(_num_ranks);
   _num_dpus = 0;
@@ -409,16 +418,12 @@ void engine::init(config conf) {
     _num_numa_nodes, _num_ranks_per_numa_node, _num_dpus);
 }
 
-void engine::register_worker_thread(int sys_core_id_) {
-  sys_core_id = sys_core_id_;
-}
-
-int engine::get_worker_thread_core_id() {
-  return sys_core_id;
+void engine::register_worker_thread(int sys_core_id) {
+  my_numa_id = numa_node_of_cpu(sys_core_id);
 }
 
 void engine::push(int pim_id, request_base *req) {
-  assert(_initialized && sys_core_id >= 0);
+  assert(_initialized && my_numa_id >= 0);
   // Push to the rank engine
   pim_id_to_rank_dpu_id(pim_id, req->rank_id, req->dpu_id);
   req->done = false;
