@@ -52,7 +52,7 @@ set(CFLAGS
   -std=c++20 -fcoroutines
 )
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -DNSTATS -g")
 #set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g3 -fno-omit-frame-pointer")
 set(LDFLAGS ${LDFLAGS_DPU_CONFIG} pthread stdc++fs)
 file(GLOB SRC_FILES src/*.cpp)
