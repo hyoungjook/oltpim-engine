@@ -259,7 +259,7 @@ int main(int argc, char *argv[]) {
   // test txn
   const int tests_per_txn = 10;
   std::uniform_int_distribution<uint64_t> rand_key_distr(1, table_size + 1);
-  std::discrete_distribution<int> txn_type_distr({8, 1}); // {read%, update%, scan%}
+  std::discrete_distribution<int> txn_type_distr({8, 1, 1}); // {read%, update%, scan%}
   struct test_txn_args {
     int sys_core_id;
   };

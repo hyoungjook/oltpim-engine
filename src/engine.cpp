@@ -40,8 +40,9 @@ void rank_buffer::alloc(int num_dpus, buf_alloc_fn alloc_fn) {
   for (int each_dpu = 0; each_dpu < num_dpus; ++each_dpu) {
     bufs[each_dpu] = (uint8_t*)aligned_alloc_fn(CACHE_LINE, DPU_BUFFER_SIZE);
   }
-  offsets = (uint32_t*)malloc(sizeof(uint32_t) * num_dpus);
-  reset_offsets();
+  offsets = (uint32_t*)aligned_alloc(CACHE_LINE, 2 * sizeof(uint32_t) * num_dpus);
+  rets_offsets = &offsets[num_dpus];
+  reset_offsets(true);
 }
 
 rank_buffer::~rank_buffer() {
@@ -57,8 +58,8 @@ rank_buffer::~rank_buffer() {
   }
 }
 
-void rank_buffer::reset_offsets() {
-  memset(offsets, 0, sizeof(uint32_t) * _num_dpus);
+void rank_buffer::reset_offsets(bool both) {
+  memset(offsets, 0, (both ? 2 : 1) * sizeof(uint32_t) * _num_dpus);
 }
 
 void rank_buffer::push_args(request_base *req) {
@@ -69,6 +70,7 @@ void rank_buffer::push_args(request_base *req) {
   buf[0] = req->req_type;
   memcpy(buf + sizeof(uint8_t), req->args(), alen);
   offsets[dpu_id] += (sizeof(uint8_t) + alen);
+  rets_offsets[dpu_id] += req->rlen;
 }
 
 void rank_buffer::push_priority_separator() {
@@ -79,17 +81,20 @@ void rank_buffer::push_priority_separator() {
   }
 }
 
-uint32_t rank_buffer::finalize_args() {
-  uint32_t max_value = 0;
+void rank_buffer::finalize_args() {
+  max_alength = 0;
+  max_rlength = 0;
   for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
     uint32_t offset = offsets[each_dpu];
     OLTPIM_ASSERT(offset < DPU_BUFFER_SIZE);
     // Store offset to the beginning of the buffer
     *(uint32_t*)bufs[each_dpu] = offset;
-    // Compute max offset
-    max_value = std::max<uint32_t>(max_value, offset);
+    // Compute max offsets
+    max_alength = std::max(max_alength, offset);
+    max_rlength = std::max(max_rlength, rets_offsets[each_dpu]);
   }
-  return sizeof(uint32_t) + max_value;
+  max_alength = ALIGN8(sizeof(uint32_t) + max_alength);
+  max_rlength = ALIGN8(max_rlength);
 }
 
 void rank_buffer::pop_rets(request_base *req) {
@@ -97,7 +102,7 @@ void rank_buffer::pop_rets(request_base *req) {
   const uint8_t rlen = req->rlen;
   memcpy(req->rets(), &bufs[dpu_id][offsets[dpu_id]], rlen);
   offsets[dpu_id] += rlen;
-  __atomic_store_1(&req->done, true, __ATOMIC_RELEASE);
+  req->done.store(true, std::memory_order_release);
 }
 
 request_list::request_list() {
@@ -147,8 +152,6 @@ int rank_engine::init(config conf, information info) {
 
   // Buffers
   _buffer.alloc(_num_dpus, conf.alloc_fn);
-  _rets_offset_counter = std::vector<uint32_t>(_num_dpus, 0);
-  _reqlists = std::vector<request_base*>(_num_numa_nodes * num_priorities);
 
   // Lock
   _process_lock.store(false);
@@ -176,74 +179,58 @@ bool rank_engine::process() {
       // Phase 0: Push args and launch PIM program asynchronously
       // Then move to phase 1
 
-      // Gather requests to this rank
+      // Construct buffer & saved_requests (linked list of all requests)
+      _saved_requests = nullptr;
+      request_base *last_req = nullptr;
+      bool something_exists = false;
       for (int priority = 0; priority < num_priorities; ++priority) {
         for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-          request_base *const reqlist = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
-          _reqlists[priority * _num_numa_nodes + each_node] = reqlist;
-          something_exists = something_exists || (reqlist != nullptr);
-        }
-      }
-
-      if (something_exists) {
-        #ifndef NSTATS
-        const auto __t0 = oltpim::now_us();
-        uint64_t __nr = 0;
-        #endif
-        // Construct buffer
-        _buffer.reset_offsets();
-        memset(&_rets_offset_counter[0], 0, sizeof(uint32_t) * _num_dpus);
-        for (int priority = 0; priority < num_priorities; ++priority) {
-          for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-            request_base **req_ptr = &_reqlists[priority * _num_numa_nodes + each_node];
-            request_base *req;
-            while ((req = *req_ptr)) {
-              _buffer.push_args(req);
-              if (req->rlen > 0) {
-                // increment rets offset counter
-                _rets_offset_counter[req->dpu_id] += req->rlen;
-                req_ptr = &(req->next);
-              }
-              else {
-                // if req has no return value, remove it from the list
-                *req_ptr = req->next;
-                __atomic_store_1(&req->done, true, __ATOMIC_RELEASE);
-              }
-              #ifndef NSTATS
-              ++__nr;
-              #endif
+          request_base *req = _request_lists_per_numa_node[each_node * num_priorities + priority].move();
+          if (req && !something_exists) {
+            // lazy buffer initialization
+            something_exists = true;
+            _buffer.reset_offsets(true);
+            for (int p = 0; p < priority; ++p) {
+              _buffer.push_priority_separator();
             }
           }
-          // Insert separator
-          if (priority < num_priorities - 1) {
-            _buffer.push_priority_separator();
+          while (req) {
+            // target of the current iteration: *req
+            // push req to buffer
+            _buffer.push_args(req);
+            // save next req
+            request_base *req_next = req->next;
+            // check there's return value
+            if (req->rlen == 0) {
+              // if req has no return value, don't push to the global linked list
+              // and mark done now
+              req->done.store(true, std::memory_order_release);
+            }
+            else {
+              // connect req to the global linked list
+              if (last_req) {
+                last_req->next = req;
+              }
+              else { // the globally first req
+                _saved_requests = req;
+              }
+              // update iterators
+              last_req = req;
+            }
+            req = req_next;
           }
         }
-
-        // Compute max lengths
-        uint32_t max_alength = _buffer.finalize_args();
-        max_alength = ALIGN8(max_alength);
-        uint32_t max_rlength = 0;
-        for (uint32_t &roffset: _rets_offset_counter) {
-          max_rlength = std::max<uint32_t>(max_rlength, roffset);
+        // Insert separator
+        if (something_exists && (priority < num_priorities - 1)) {
+          _buffer.push_priority_separator();
         }
-        _max_rlength = ALIGN8(max_rlength);
-
+      }
+      if (something_exists) {
+        _buffer.finalize_args();
         // Copy args to rank
-        #ifndef NSTATS
-        stat[stats::CNTR::NUM_REQUESTS] += __nr;
-        const auto __t1 = oltpim::now_us();
-        stat[stats::CNTR::PREP1_US] += (__t1 - __t0);
-        #endif
-        _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, max_alength, true);
-
+        _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, _buffer.max_alength, true);
         // Launch
-        #ifndef NSTATS
-        __launch_start_us = oltpim::now_us();
-        stat[stats::CNTR::COPY1_US] += (__launch_start_us - __t1);
-        #endif
         _rank.launch(true);
-
         // Move to phase 1
         _process_phase = 1;
       }
@@ -263,38 +250,21 @@ bool rank_engine::process() {
         abort();
       }
       if (pim_done) {
-        #ifndef NSTATS
-        const auto __t2 = oltpim::now_us();
-        stat[stats::CNTR::LAUNCH_US] += (__t2 - __launch_start_us);
-        #endif
         //_rank.log_read(stdout); // debug
         // Copy rets from rank
-        _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, _max_rlength, false);
-        #ifndef NSTATS
-        const auto __t3 = oltpim::now_us();
-        stat[stats::CNTR::COPY2_US] += (__t3 - __t2);
-        #endif
+        _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, _buffer.max_rlength, false);
 
         // Distribute results: the traversal order should be the same as construction
-        _buffer.reset_offsets();
-        for (int priority = 0; priority < num_priorities; ++priority) {
-          for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-            request_base *req = _reqlists[priority * _num_numa_nodes + each_node];
-            while (req) {
-              _buffer.pop_rets(req);
-              req = req->next;
-            }
-          }
+        _buffer.reset_offsets(false);
+        request_base *req = _saved_requests;
+        while (req) {
+          _buffer.pop_rets(req);
+          req = req->next;
         }
 
         // Move to phase 0
         _process_phase = 0;
         something_exists = true;
-        #ifndef NSTATS
-        const auto __t4 = oltpim::now_us();
-        stat[stats::CNTR::PREP2_US] += (__t4 - __t3);
-        ++stat[stats::CNTR::NUM_ROUNDS];
-        #endif
       }
     }
     // Release spinlock
@@ -426,15 +396,15 @@ void engine::push(int pim_id, request_base *req) {
   assert(_initialized && my_numa_id >= 0);
   // Push to the rank engine
   pim_id_to_rank_dpu_id(pim_id, req->rank_id, req->dpu_id);
-  req->done = false;
+  req->done.store(false);
   _rank_engines[req->rank_id].push(req);
 }
 
 bool engine::is_done(request_base *req) {
   assert(_initialized);
-  if (req->done) return true;
+  if (req->done.load(std::memory_order_acquire)) return true;
   _rank_engines[req->rank_id].process();
-  return req->done;
+  return req->done.load(std::memory_order_acquire);
 }
 
 void engine::pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_id) {

@@ -14,7 +14,7 @@ public:
   request_base *next;     // Used internally
   uint16_t rank_id;       // Used internally
   uint8_t dpu_id;         // Used internally
-  volatile bool done;     // Used internally
+  std::atomic<bool> done; // Used internally
   uint8_t req_type;       // USER INPUT
   uint8_t alen, rlen;     // USER INPUT
   request_base() {}
@@ -40,25 +40,26 @@ struct request_norets {
   request_norets(): meta(TYPE, sizeof(arg_t), 0) {}
 };
 
-struct rank_buffer {
+struct alignas(CACHE_LINE) rank_buffer {
   using buf_alloc_fn = void*(*)(size_t);
   rank_buffer() {}
   void alloc(int num_dpus, buf_alloc_fn alloc_fn);
   ~rank_buffer();
 
-  inline void reset_offsets();
+  inline void reset_offsets(bool both);
 
   // Constructing the args buffer
   inline void push_args(request_base *req);
   inline void push_priority_separator();
-  inline uint32_t finalize_args();
+  inline void finalize_args();
 
   // Distributing the rets buffer
   inline void pop_rets(request_base *req);
 
   int _num_dpus;
   uint8_t **bufs = nullptr;
-  uint32_t *offsets = nullptr;
+  uint32_t *offsets = nullptr, *rets_offsets = nullptr;
+  uint32_t max_alength, max_rlength;
 };
 
 class alignas(CACHE_LINE) request_list {
@@ -116,9 +117,7 @@ class rank_engine {
 
   // PIM buffer
   rank_buffer _buffer;
-  std::vector<uint32_t> _rets_offset_counter;
-  uint32_t _max_rlength;
-  std::vector<request_base*> _reqlists;
+  request_base *_saved_requests;
 
   // Process locks
   std::atomic<bool> _process_lock;
