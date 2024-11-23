@@ -50,13 +50,13 @@
 #define LIST_ALLOCATOR_SIZE_BITS (17)
 #define __LIST_ALLOCATOR_SIZEOF_ENTITY (64) // for debug
 
+/* OID array */
+// 4 * 2^20 = 4MB
+#define OID_ARRAY_SIZE_BITS (20)
+
 /* XID hashmap */
 // sizeof(xid_map_pair_t) = 16
 // 16 * 2^17 = 2MB
 #define HASHMAP_SIZE_BITS (17)
-
-/* OID array */
-// 4 * 2^18 = 1MB
-#define OID_ARRAY_SIZE_BITS (18)
 
 #endif

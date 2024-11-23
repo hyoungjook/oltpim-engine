@@ -52,6 +52,7 @@ static void ws_pool_init_global() {
     // each entry points to the next free slot
     ws_pool_write_freeptr(idx, idx + 1);
   }
+  ws_pool_write_freeptr(LIST_ALLOCATOR_SIZE - 1, ws_node_id_null);
   ws_free_list_head = 0;
 }
 

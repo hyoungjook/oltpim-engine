@@ -46,6 +46,7 @@ static node_id_t node_alloc_next;
 
 static inline node_id_t node_alloc() {
   mutex_lock(node_alloc_mutex);
+  assert_print(node_alloc_next < BTREE_ALLOCATOR_SIZE);
   node_id_t node_id = node_alloc_next;
   ++node_alloc_next;
   mutex_unlock(node_alloc_mutex);

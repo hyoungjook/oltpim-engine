@@ -44,6 +44,8 @@ void oid_manager_init_global() {
     buf[1] = idx + 2;
     mram_write(&buf, &oid_array[idx], 8);
   }
+  buf[1] = oid_value_null;
+  mram_write(&buf, &oid_array[OID_ARRAY_SIZE - 1], 8);
   oid_free_list_head = 0;
 }
 

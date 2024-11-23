@@ -257,7 +257,8 @@ bool rank_engine::process() {
         while (!_rank.is_done());
         fprintf(stderr, "Rank[%d] in fault\n", _rank_id);
         _rank.log_read(stderr, true);
-        exit(1);
+        _rank.handle_fault();
+        abort();
       }
       if (pim_done) {
         #ifndef NSTATS

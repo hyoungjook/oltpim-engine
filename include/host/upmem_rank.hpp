@@ -35,6 +35,8 @@ class rank {
   static int numa_node_of(void *dpu_rank);
   static void static_free(void *dpu_rank);
 
+  void handle_fault();
+
  private:
   enum memory_type {
     MRAM, WRAM, IRAM

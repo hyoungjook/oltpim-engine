@@ -123,6 +123,7 @@ void object_init_global() {
     // each entry points to the next free slot
     ver_pool_write_freeptr(idx, idx + 1);
   }
+  ver_pool_write_freeptr(VERSION_ALLOCATOR_SIZE - 1, version_id_null);
   ver_free_list_head = 0;
   ver_free_list_tail = VERSION_ALLOCATOR_SIZE - 1;
 }

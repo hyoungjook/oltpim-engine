@@ -12,6 +12,7 @@ extern "C" {
   #include <dpu_profiler.h>
   #include <dpu_program.h>
   #include <dpu_runner.h>
+  #include <dpu_target_macros.h>
 }
 
 namespace upmem {
@@ -247,6 +248,26 @@ int rank::numa_node_of(void *dpu_rank) {
 
 void rank::static_free(void *dpu_rank) {
   DPU_ASSERT(dpu_free_rank((dpu_rank_t*)dpu_rank));
+}
+
+void rank::handle_fault() {
+  struct dpu_t *dpu = nullptr;
+  bool running = false, fault = false;
+  STRUCT_DPU_FOREACH(_rank, dpu) {
+    DPU_ASSERT(dpu_poll_dpu(dpu, &running, &fault));
+    if (fault) {
+      break;
+    }
+  }
+  if (dpu) {
+    // dpu points to the first faulty dpu
+    dpu_id_t rank_id = dpu_get_rank_id(_rank) & DPU_TARGET_MASK;
+    dpu_slice_id_t slice_id = dpu_get_slice_id(dpu);
+    dpu_member_id_t member_id = dpu_get_member_id(dpu);
+    printf("One (or more) DPUs in fault. To attach to the first faulty DPU, run:\n");
+    printf("dpu-lldb-attach-dpu %u.%u.%u %s\n",
+      rank_id, slice_id, member_id, DPU_BINARY);
+  }
 }
 
 }
