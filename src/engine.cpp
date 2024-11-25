@@ -160,10 +160,6 @@ int rank_engine::init(config conf, information info) {
   _process_lock.store(false);
   _process_phase = 0;
 
-  // Numa launch
-  _enable_numa_launch = info.enable_numa_launch;
-  _numa_scheduler = (numa_run::scheduler*)info.numa_scheduler;
-
   // Return number of dpus
   return _num_dpus;
 }
@@ -276,6 +272,10 @@ bool rank_engine::process() {
   return something_exists;
 }
 
+void rank_engine::print_log(int dpu_id) {
+  _rank.log_read(stdout, false, dpu_id);
+}
+
 engine engine::g_engine;
 
 engine::engine(): _initialized(false) {}
@@ -348,23 +348,6 @@ void engine::init(config conf) {
     [](const void *dpu_rank){return dpu_rank == nullptr;}), dpu_ranks.end());
   OLTPIM_ASSERT(dpu_ranks.size() == (size_t)_num_ranks);
 
-  rank_info.enable_numa_launch = conf.enable_numa_launch;
-  if (conf.enable_numa_launch) {
-    if ((size_t)(conf.numa_launch_num_workers_per_numa_node * _num_numa_nodes) >
-        (std::thread::hardware_concurrency() / 2)) {
-      std::cerr << "Too many workers_per_numa_node on numa_scheduler " <<
-                   "will result in cpu oversubscription.\n";
-      std::abort();
-    }
-    // NUMA launch settings
-    _numa_scheduler = std::make_unique<numa_run::scheduler>(
-      conf.numa_launch_num_workers_per_numa_node,
-      // avoid transaction workers on the physical cores
-      std::thread::hardware_concurrency() / 2
-    );
-    rank_info.numa_scheduler = (void*)_numa_scheduler.get();
-  }
-
   // Allocate rank engines
   _rank_engines = std::vector<rank_engine>(_num_ranks);
   _num_dpus = 0;
@@ -408,6 +391,20 @@ bool engine::is_done(request_base *req) {
   if (req->done.load(std::memory_order_acquire)) return true;
   _rank_engines[req->rank_id].process();
   return req->done.load(std::memory_order_acquire);
+}
+
+void engine::print_log(int pim_id) {
+  if (pim_id < 0) {
+    for (auto &re: _rank_engines) {
+      re.print_log();
+    }
+  }
+  else {
+    uint16_t rank_id = 0;
+    uint8_t dpu_id = 0;
+    pim_id_to_rank_dpu_id(pim_id, rank_id, dpu_id);
+    _rank_engines[rank_id].print_log((int)dpu_id);
+  }
 }
 
 void engine::pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_id) {

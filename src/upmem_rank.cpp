@@ -66,6 +66,7 @@ rank::~rank() {
 void rank::load(const char *binary_path) {
   struct dpu_t *dpu;
   _program = (struct dpu_program_t*)malloc(sizeof(*_program));
+  _binary_path = binary_path;
   dpu_elf_file_t elf_info;
   struct _dpu_loader_context_t loader_context;
 
@@ -178,14 +179,19 @@ void rank::broadcast(uint32_t symbol_id, void *buffer, uint32_t length,
 
 static std::mutex log_print_mutex;
 
-void rank::log_read(FILE *stream, bool fault_only) {
+void rank::log_read(FILE *stream, bool fault_only, int dpu_id) {
   std::unique_lock lck(log_print_mutex);
   struct dpu_t *dpu;
+  int each_dpu = -1;
   STRUCT_DPU_FOREACH(_rank, dpu) {
+    ++each_dpu;
     if (fault_only) {
       bool done = false, fault = false;
       DPU_ASSERT(dpu_status_dpu(dpu, &done, &fault));
       if (!fault) continue;
+    }
+    if (dpu_id >= 0) {
+      if (each_dpu != dpu_id) continue;
     }
     fprintf(stream, "===\n");
     DPU_ASSERT(dpulog_read_for_dpu(dpu, stream));
@@ -266,7 +272,7 @@ void rank::handle_fault() {
     dpu_member_id_t member_id = dpu_get_member_id(dpu);
     printf("One (or more) DPUs in fault. To attach to the first faulty DPU, run:\n");
     printf("dpu-lldb-attach-dpu %u.%u.%u %s\n",
-      rank_id, slice_id, member_id, DPU_BINARY);
+      rank_id, slice_id, member_id, _binary_path);
   }
 }
 

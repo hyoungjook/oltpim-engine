@@ -27,7 +27,7 @@ class rank {
   void broadcast(uint32_t symbol_id, void *buffer, uint32_t length,
     uint32_t symbol_offset = 0);
 
-  void log_read(FILE *stream, bool fault_only = false);
+  void log_read(FILE *stream, bool fault_only = false, int dpu_id = -1);
 
   inline int num_dpus() {return _num_dpus;}
   inline int numa_node() {return _numa_node;}
@@ -51,6 +51,7 @@ class rank {
   int _numa_node;
   uint32_t _mram_size;
   struct dpu_program_t *_program;
+  const char *_binary_path;
 
   struct dpu_symbol_info {
     uint32_t address, size;

@@ -144,9 +144,7 @@ int main(int argc, char *argv[]) {
   engine.add_index(index_info{.primary = true});
   engine.init(oltpim::engine::config{
     .num_ranks_per_numa_node = num_ranks_per_numa_node,
-    .alloc_fn = nullptr,
-    .enable_numa_launch = false,
-    .numa_launch_num_workers_per_numa_node = 0
+    .alloc_fn = nullptr
   });
 
   // Required to pin host threads to cores
@@ -227,9 +225,7 @@ int main(int argc, char *argv[]) {
         }
 
         for (uint64_t k = 0; k < num_keys; ++k) {
-          auto &ret = reqs[k].rets;
-          assert(ret.status == STATUS_SUCCESS);
-          (void)ret;
+          assert(reqs[k].rets.status == STATUS_SUCCESS);
         }
       }
 
@@ -298,9 +294,8 @@ int main(int argc, char *argv[]) {
       for (uint64_t key = lkey; key <= rkey; ++key) {
         if (1 <= key && key <= (uint64_t)table_size) {
           if (status == STATUS_SUCCESS) {
-            uint64_t value = req.rets.values[expected_outs];
+            [[maybe_unused]] uint64_t value = req.rets.values[expected_outs];
             assert(value == key + 7 || value == key + 77);
-            (void)value;
           }
           ++expected_outs;
         }
