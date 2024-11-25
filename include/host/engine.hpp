@@ -194,9 +194,6 @@ class engine {
   int _num_ranks;
   std::vector<rank_engine> _rank_engines;
 
-  // Buffers
-  std::vector<rank_buffer> _rank_buffers;
-
   // Structures for pim_id -> (rank_id, dpu_id)
   int _num_dpus;
   std::vector<int> _num_dpus_per_rank;
