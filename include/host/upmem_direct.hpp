@@ -1,22 +1,19 @@
 #pragma once
 
-/**
- * The UPMEM direct interface modified from 
- * https://github.com/Loremkang/upmem-sdk-light/blob/7ca4de5b75fc0781321c8557815ffe3e247ffc18/src/pim_interface/direct_interface.hpp
- * It allows CPU-PIM copy to occur entirely within the calling thread
- */
-
 #include <immintrin.h>
 #include <x86intrin.h>
 #include <cinttypes>
 #include <assert.h>
 #include <libudev.h>
+#include <iostream>
 
 extern "C" {
 #include <dpu.h>
 #include <dpu_description.h>
+#include <dpu_hw_description.h>
 #include <dpu_management.h>
 #include <dpu_memory.h>
+#include <dpu_runner.h>
 #include <dpu_target.h>
 
 /**
@@ -70,23 +67,142 @@ typedef struct _hw_dpu_rank_allocation_parameters_t {
     bool bypass_module_compatibility;
 } *hw_dpu_rank_allocation_parameters_t;
 
+typedef uint32_t dpu_selected_mask_t;
+
+struct dpu_configuration_slice_info_t {
+    uint64_t byte_order;
+    uint64_t structure_value; // structure register is overwritten by debuggers, we need a place where debugger
+    // can access the last structure so that it replays the last write_structure command.
+    struct dpu_slice_target slice_target;
+
+    dpu_bitfield_t host_mux_mram_state; // Contains the state of all the MRAM muxes
+
+    dpu_selected_mask_t dpus_per_group[DPU_MAX_NR_GROUPS];
+
+    dpu_selected_mask_t enabled_dpus;
+    bool all_dpus_are_enabled;
+};
+
+#define ALL_CIS ((1u << DPU_MAX_NR_CIS) - 1u)
+#define CI_MASK_ON(mask, ci) (((mask) & (1u << (ci))) != 0)
+
+struct dpu_control_interface_context {
+    dpu_ci_bitfield_t fault_decode;
+    dpu_ci_bitfield_t fault_collide;
+
+    dpu_ci_bitfield_t color;
+    struct dpu_configuration_slice_info_t slice_info[DPU_MAX_NR_CIS]; // Used for the current application to hold slice info
+};
+
+struct dpu_runtime_state_t {
+    struct dpu_control_interface_context control_interface;
+    struct _dpu_run_context_t run_context;
+};
+
 struct dpu_rank_t {
     dpu_type_t type;
     dpu_rank_id_t rank_id;
     dpu_rank_id_t rank_handler_allocator_id;
     dpu_description_t description;
+    uint32_t dpu_offset;
+    struct dpu_runtime_state_t runtime;
 };
 
 /**
- * This is declared with __API_SYMBOL__ but not declared in header
+ * These are declared with __API_SYMBOL__ but not declared in header
  */
-dpu_error_t dpu_switch_mux_for_rank(struct dpu_rank_t *rank,
-				    bool set_mux_for_host);
+dpu_error_t dpu_switch_mux_for_rank(struct dpu_rank_t *rank, bool set_mux_for_host);
+
+uint32_t ufi_select_all_even_disabled(struct dpu_rank_t *rank, uint8_t *ci_mask);
+uint32_t ufi_set_mram_mux(struct dpu_rank_t *rank, uint8_t ci_mask, dpu_ci_bitfield_t ci_mux_pos);
+uint32_t ufi_write_dma_ctrl(struct dpu_rank_t *rank, uint8_t ci_mask, uint8_t address, uint8_t data);
+uint32_t ufi_read_dma_ctrl(struct dpu_rank_t *rank, uint8_t ci_mask, uint8_t *data);
+uint32_t ufi_clear_dma_ctrl(struct dpu_rank_t *rank, uint8_t ci_mask);
 
 }
 
 namespace upmem {
 
+/**
+ * The optimized mux_switch API.
+ * The main contribution is that we removed unnecessary call to
+ * ufi_select_dpu_even_disabled() inside dpu_check_wavegen_mux_status_for_rank().
+ * !!!!! ASSUMES ALL DPUS ARE ENABLED !!!!!
+ * If not, it may fail. (not tested)
+ */
+class mux {
+public:
+  static bool is_switch_required(dpu_rank_t *rank, bool mux_for_host) {
+    dpu_description_t desc = rank->description;
+    const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
+    const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
+    for (uint8_t each_slice = 0; each_slice < nr_cis; ++each_slice) {
+      dpu_bitfield_t host_mux_mram_state =
+        rank->runtime.control_interface.slice_info[each_slice].host_mux_mram_state;
+      if ((mux_for_host && __builtin_popcount(host_mux_mram_state) < nr_dpus_per_ci) ||
+          (!mux_for_host && host_mux_mram_state)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void switch_begin(dpu_rank_t *rank, bool mux_for_host) {
+    dpu_description_t desc = rank->description;
+    const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
+    const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
+    for (uint8_t each_slice = 0; each_slice < nr_cis; ++each_slice) {
+      rank->runtime.control_interface.slice_info[each_slice].host_mux_mram_state =
+        (mux_for_host ? ((1 << nr_dpus_per_ci) - 1) : 0x0);
+    }
+    uint8_t ci_mask = ALL_CIS;
+    DPU_ASSERT((dpu_error_t)ufi_select_all_even_disabled(rank, &ci_mask));
+    assert(ci_mask == ALL_CIS);
+    DPU_ASSERT((dpu_error_t)ufi_set_mram_mux(rank, ci_mask, mux_for_host ? 0xFF : 0x00));
+  }
+
+  static void switch_sync(dpu_rank_t *rank, bool mux_for_host) {
+    dpu_description_t desc = rank->description;
+    const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
+    const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
+    uint8_t ci_mask = ALL_CIS;
+    // dpu_check_wavegen_mux_status_for_rank
+    DPU_ASSERT((dpu_error_t)ufi_write_dma_ctrl(rank, ci_mask, 0xFF, 0x02));
+    DPU_ASSERT((dpu_error_t)ufi_clear_dma_ctrl(rank, ci_mask));
+    uint8_t result_array[DPU_MAX_NR_CIS];
+    const uint8_t wavegen_expected = mux_for_host ? 0x00 : ((1 << 0) | (1 << 1));
+    for (uint8_t each_dpu = 0; each_dpu < nr_dpus_per_ci; ++each_dpu) {
+      uint32_t timeout = 100;
+      bool should_retry = false;
+      do {
+        DPU_ASSERT((dpu_error_t)ufi_read_dma_ctrl(rank, ci_mask, result_array));
+        for (uint8_t each_slice = 0; each_slice < nr_cis; ++each_slice) {
+          if ((result_array[each_slice] & 0x7B) != wavegen_expected) {
+            should_retry = true;
+            break;
+          }
+        }
+        --timeout;
+      } while (timeout && should_retry);
+      if (!timeout) {
+        std::cerr << "upmem::mux::switch_sync: Timeout waiting for result to be correct\n";
+        std::abort();
+      }
+    }
+  }
+
+  static void switch_rank(dpu_rank_t *rank, bool mux_for_host) {
+    if (!is_switch_required(rank, mux_for_host)) return;
+    switch_begin(rank, mux_for_host);
+    switch_sync(rank, mux_for_host);
+  }
+};
+
+/**
+ * The UPMEM direct interface modified from 
+ * https://github.com/Loremkang/upmem-sdk-light/blob/7ca4de5b75fc0781321c8557815ffe3e247ffc18/src/pim_interface/direct_interface.hpp
+ * It allows CPU-PIM copy to occur entirely within the calling thread
+ */
 class direct {
 private:
   static void byte_interleave_avx512(uint64_t *input, uint64_t *output, bool use_stream) {
@@ -240,7 +356,8 @@ private:
 
 public:
   static dpu_error_t copy_to_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
-    DPU_ASSERT(dpu_switch_mux_for_rank(rank, true));
+    //DPU_ASSERT(dpu_switch_mux_for_rank(rank, true));
+    mux::switch_rank(rank, true);
     dpu_description_t desc = rank->description;
     auto params = (hw_dpu_rank_allocation_parameters_t)(desc->_internals.data);
     uint8_t *base_addr = params->ptr_region;
@@ -249,7 +366,8 @@ public:
   }
 
   static dpu_error_t copy_from_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
-    DPU_ASSERT(dpu_switch_mux_for_rank(rank, true));
+    //DPU_ASSERT(dpu_switch_mux_for_rank(rank, true));
+    mux::switch_rank(rank, true);
     dpu_description_t desc = rank->description;
     auto params = (hw_dpu_rank_allocation_parameters_t)(desc->_internals.data);
     uint8_t *base_addr = params->ptr_region;
