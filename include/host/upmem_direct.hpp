@@ -7,6 +7,8 @@
 #include <libudev.h>
 #include <iostream>
 
+#define UPMEM_USE_DIRECT_MUX
+
 extern "C" {
 #include <dpu.h>
 #include <dpu_description.h>
@@ -192,9 +194,13 @@ public:
   }
 
   static void switch_rank(dpu_rank_t *rank, bool mux_for_host) {
+#if defined(UPMEM_USE_DIRECT_MUX)
     if (!is_switch_required(rank, mux_for_host)) return;
     switch_begin(rank, mux_for_host);
     switch_sync(rank, mux_for_host);
+#else
+    DPU_ASSERT(dpu_switch_mux_for_rank(rank, mux_for_host));
+#endif
   }
 };
 
@@ -356,7 +362,6 @@ private:
 
 public:
   static dpu_error_t copy_to_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
-    //DPU_ASSERT(dpu_switch_mux_for_rank(rank, true));
     mux::switch_rank(rank, true);
     dpu_description_t desc = rank->description;
     auto params = (hw_dpu_rank_allocation_parameters_t)(desc->_internals.data);
@@ -366,7 +371,6 @@ public:
   }
 
   static dpu_error_t copy_from_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
-    //DPU_ASSERT(dpu_switch_mux_for_rank(rank, true));
     mux::switch_rank(rank, true);
     dpu_description_t desc = rank->description;
     auto params = (hw_dpu_rank_allocation_parameters_t)(desc->_internals.data);
