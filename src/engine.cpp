@@ -63,6 +63,7 @@ void rank_buffer::reset_offsets(bool both) {
 }
 
 void rank_buffer::push_args(request_base *req) {
+  assert(!req->done.load(std::memory_order_acquire));
   const uint32_t dpu_id = req->dpu_id;
   const uint8_t alen = req->alen;
   // First sizeof(uint32_t) bytes stores the offset 
@@ -100,6 +101,8 @@ void rank_buffer::finalize_args() {
 void rank_buffer::pop_rets(request_base *req) {
   const uint32_t dpu_id = req->dpu_id;
   const uint8_t rlen = req->rlen;
+  // no-return requests are already popped before launch()
+  assert(rlen > 0);
   memcpy(req->rets(), &bufs[dpu_id][offsets[dpu_id]], rlen);
   offsets[dpu_id] += rlen;
   req->done.store(true, std::memory_order_release);
@@ -111,12 +114,10 @@ request_list::request_list() {
 
 void request_list::push(request_base *req) {
   // assume req is pre-allocated and not released until we set *done
-  request_base *curr_head = _head.load(std::memory_order_seq_cst);
-  do {
-    req->next = curr_head;
-  } while (
-    !_head.compare_exchange_strong(curr_head, req, std::memory_order_seq_cst)
-  );
+  req->next = _head.load(std::memory_order_relaxed);
+  while (!_head.compare_exchange_weak(
+    req->next, req,
+    std::memory_order_release, std::memory_order_relaxed));
 }
 
 request_base *request_list::move() {
@@ -129,22 +130,7 @@ int rank_engine::init(config conf, information info) {
   _rank_id = info.rank_id;
   _rank.init(conf.dpu_rank);
   _rank.load(info.dpu_binary);
-  {
-    uint32_t args_symbol_id = _rank.register_dpu_symbol(info.dpu_args_symbol);
-    uint32_t rets_symbol_id = _rank.register_dpu_symbol(info.dpu_rets_symbol);
-    OLTPIM_ASSERT(args_symbol_id == dpu_args_symbol_id);
-    OLTPIM_ASSERT(rets_symbol_id == dpu_rets_symbol_id);
-  }
   _num_dpus = _rank.num_dpus();
-
-  // Initialize index info
-  {
-    uint32_t num_indexes_symbol_id = _rank.register_dpu_symbol(info.dpu_num_indexes_symbol);
-    uint32_t index_infos_symbol_id = _rank.register_dpu_symbol(info.dpu_index_infos_symbol);
-    uint64_t num_indexes_buf = conf.num_indexes;
-    _rank.broadcast(num_indexes_symbol_id, &num_indexes_buf, sizeof(uint64_t));
-    _rank.broadcast(index_infos_symbol_id, &conf.index_infos, sizeof(index_info) * DPU_MAX_NUM_INDEXES);
-  }
 
   // Request list
   _num_numa_nodes = info.num_numa_nodes;
@@ -155,6 +141,27 @@ int rank_engine::init(config conf, information info) {
 
   // Buffers
   _buffer.alloc(_num_dpus, conf.alloc_fn);
+
+  // Register transfers in advance
+  {
+    uint32_t args_transfer_id = _rank.register_dpu_transfer(
+      info.dpu_args_symbol, (void**)_buffer.bufs);
+    uint32_t rets_transfer_id = _rank.register_dpu_transfer(
+      info.dpu_rets_symbol, (void**)_buffer.bufs);
+    OLTPIM_ASSERT(args_transfer_id == dpu_args_transfer_id);
+    OLTPIM_ASSERT(rets_transfer_id == dpu_rets_transfer_id);
+  }
+
+  // Initialize index info
+  {
+    uint64_t num_indexes_buf = conf.num_indexes;
+    uint32_t num_indexes_transfer_id = _rank.register_dpu_transfer(
+      info.dpu_num_indexes_symbol, (void**)(&num_indexes_buf), true);
+    uint32_t index_infos_transfer_id = _rank.register_dpu_transfer(
+      info.dpu_index_infos_symbol, (void**)(&conf.index_infos), true);
+    _rank.copy(num_indexes_transfer_id, sizeof(uint64_t), true);
+    _rank.copy(index_infos_transfer_id, sizeof(index_info) * DPU_MAX_NUM_INDEXES, true);
+  }
 
   // Lock
   _process_lock.store(false);
@@ -204,6 +211,9 @@ bool rank_engine::process() {
               // if req has no return value, don't push to the global linked list
               // and mark done now
               req->done.store(true, std::memory_order_release);
+              if (last_req) {
+                last_req->next = req_next;
+              }
             }
             else {
               // connect req to the global linked list
@@ -227,7 +237,7 @@ bool rank_engine::process() {
       if (something_exists) {
         _buffer.finalize_args();
         // Copy args to rank
-        _rank.copy(dpu_args_symbol_id, (void**)_buffer.bufs, _buffer.max_alength, true);
+        _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
         // Launch
         _rank.launch(true);
         // Move to phase 1
@@ -251,7 +261,7 @@ bool rank_engine::process() {
       if (pim_done) {
         //_rank.log_read(stdout); // debug
         // Copy rets from rank
-        _rank.copy(dpu_rets_symbol_id, (void**)_buffer.bufs, _buffer.max_rlength, false);
+        _rank.copy(dpu_rets_transfer_id, _buffer.max_rlength, false);
 
         // Distribute results: the traversal order should be the same as construction
         _buffer.reset_offsets(false);
@@ -382,7 +392,7 @@ void engine::push(int pim_id, request_base *req) {
   assert(_initialized && my_numa_id >= 0);
   // Push to the rank engine
   pim_id_to_rank_dpu_id(pim_id, req->rank_id, req->dpu_id);
-  req->done.store(false);
+  req->done.store(false, std::memory_order_release);
   _rank_engines[req->rank_id].push(req);
 }
 

@@ -12,10 +12,6 @@
 #include "engine.hpp"
 #include "interface_host.hpp"
 
-//thread_local std::random_device _random_device;
-//thread_local std::mt19937 _rand_gen(_random_device());
-thread_local std::mt19937 _rand_gen(7777);
-
 struct alignas(64) counter {
   uint64_t commits = 0;
   uint64_t fails = 0;
@@ -226,6 +222,63 @@ int main(int argc, char *argv[]) {
 
         for (uint64_t k = 0; k < num_keys; ++k) {
           assert(reqs[k].rets.status == STATUS_SUCCESS);
+        }
+      }
+
+      // commit
+      {
+        oltpim::request_commit reqs[keys_per_txn];
+        uint64_t end_csn = get_end_csn();
+        int cnt = 0;
+        for (int pim_id: touched_pims) {
+          auto &arg = reqs[cnt].args;
+          arg.xid = xid;
+          arg.csn = end_csn;
+          engine.push(pim_id, &reqs[cnt]);
+          ++cnt;
+        }
+        for (int i = 0; i < cnt; ++i) {
+          while (!engine.is_done(&reqs[i])) {
+            co_await std::suspend_always{};
+          }
+        }
+      }
+
+      ++counters[worker_thd_core_id].commits;
+    }
+
+    // verify
+    for (uint64_t key_base = start_key; key_base < end_key; key_base += keys_per_txn) {
+      uint64_t num_keys = std::min(keys_per_txn, end_key - key_base);
+      // begin
+      uint64_t xid = get_new_xid();
+      uint64_t begin_csn = get_begin_csn();
+      std::set<int> touched_pims;
+
+      // batch get
+      {
+        oltpim::request_get reqs[keys_per_txn];
+        for (uint64_t k = 0; k < num_keys; ++k) {
+          auto &arg = reqs[k].args;
+          const uint64_t key = key_base + k;
+          arg.key = key;
+          arg.xid = xid;
+          arg.csn = begin_csn;
+          arg.index_id = 0;
+          arg.oid_query = 0;
+          int pim_id = key_to_pim(key);
+          touched_pims.insert(pim_id);
+          engine.push(pim_id, &reqs[k]);
+        }
+        for (uint64_t k = 0; k < num_keys; ++k) {
+          while (!engine.is_done(&reqs[k])) {
+            co_await std::suspend_always{};
+          }
+        }
+
+        for (uint64_t k = 0; k < num_keys; ++k) {
+          assert(reqs[k].rets.status == STATUS_SUCCESS);
+          assert(reqs[k].rets.value == reqs[k].args.key + 7);
         }
       }
 

@@ -60,6 +60,10 @@ void rank::init(void *dpu_rank) {
 }
 
 rank::~rank() {
+  for (dpu_transfer_matrix *m: _registered_transfers) {
+    free(m);
+  }
+  _registered_transfers.clear();
   if (_program) dpu_free_program(_program);
   if (_rank) DPU_ASSERT(dpu_free_rank(_rank));
 }
@@ -112,78 +116,67 @@ bool rank::is_done(bool *fault) {
   return _done;
 }
 
-uint32_t rank::register_dpu_symbol(const char *symbol) {
-  if (!_program) DPU_ASSERT(DPU_ERR_NO_PROGRAM_LOADED);
-  uint32_t nr_symbols = _program->symbols->nr_symbols;
-  for (uint32_t each_symbol = 0; each_symbol < nr_symbols; each_symbol++) {
-    dpu_elf_symbol_t *s = _program->symbols->map + each_symbol;
-    if (strcmp(s->name, symbol) == 0) {
-      dpu_symbol_info found_symbol = {s->value, s->size};
-      uint32_t symbol_id = _registered_symbols.size();
-      _registered_symbols.push_back(found_symbol);
-      return symbol_id;
+uint32_t rank::register_dpu_transfer(const char *symbol, void **buffers, bool broadcast) {
+  uint32_t address = (uint32_t)-1;
+  {
+    // Find symbol address
+    if (!_program) DPU_ASSERT(DPU_ERR_NO_PROGRAM_LOADED);
+    uint32_t nr_symbols = _program->symbols->nr_symbols;
+    for (uint32_t each_symbol = 0; each_symbol < nr_symbols; ++each_symbol) {
+      dpu_elf_symbol_t *s = _program->symbols->map + each_symbol;
+      if (strcmp(s->name, symbol) == 0) {
+        address = s->value;
+        break;
+      }
     }
+    DPU_ASSERT((address != (uint32_t)-1) ? DPU_OK : DPU_ERR_UNKNOWN_SYMBOL);
   }
-  DPU_ASSERT(DPU_ERR_UNKNOWN_SYMBOL);
-  return -1;
-}
-
-void rank::copy(uint32_t symbol_id, void **buffers, uint32_t length,
-    bool direction_to_dpu, uint32_t symbol_offset) {
-  if (symbol_id >= _registered_symbols.size())
-    DPU_ASSERT(DPU_ERR_INVALID_SYMBOL_ACCESS);
-
-  dpu_transfer_matrix matrix;
-  auto mem_type = fill_transfer_matrix(&matrix, symbol_id, symbol_offset, length);
-  using copy_fn_type = dpu_error_t (*)(dpu_rank_t*, dpu_transfer_matrix*);
-  const auto copy_fn = (copy_fn_type)get_copy_fn(mem_type, direction_to_dpu);
-
-  // Fill ptr
+  // Register transfer
+  uint32_t transfer_id = _registered_transfers.size();
+  auto *matrix = (dpu_transfer_matrix*)malloc(sizeof(dpu_transfer_matrix));
+  _registered_transfers.push_back(matrix);
+  // address: store the original address for now. It will be modified to
+  // aligned & offsetted address later.
+  matrix->offset = address;
+  matrix->type = DPU_DEFAULT_XFER_MATRIX;
+  // buffers
   {
     struct dpu_t *dpu;
     int each_dpu = 0, each_enabled_dpu = 0;
     STRUCT_DPU_FOREACH(_rank, dpu) {
       if (dpu_is_enabled(dpu)) {
-        matrix.ptr[each_dpu] = buffers[each_enabled_dpu];
+        // If broadcast, treat void** buffers as just single void* pointer.
+        // Otherwise, void** buffers is the array of void* pointers.
+        matrix->ptr[each_dpu] = (broadcast ? (void*)buffers : buffers[each_enabled_dpu]);
         ++each_enabled_dpu;
       }
       else {
-        matrix.ptr[each_dpu] = nullptr;
+        matrix->ptr[each_dpu] = nullptr;
       }
       ++each_dpu;
     }
     DPU_ASSERT(each_enabled_dpu == _num_dpus ? DPU_OK : DPU_ERR_INTERNAL);
   }
-
-  DPU_ASSERT(copy_fn(_rank, &matrix));
+  return transfer_id;
 }
 
-void rank::broadcast(uint32_t symbol_id, void *buffer, uint32_t length,
-    uint32_t symbol_offset) {
-  if (symbol_id >= _registered_symbols.size())
-    DPU_ASSERT(DPU_ERR_INVALID_SYMBOL_ACCESS);
+void rank::copy(uint32_t transfer_id, uint32_t length, bool direction_to_dpu, uint32_t symbol_offset) {
+  DPU_ASSERT(transfer_id < _registered_transfers.size() ? DPU_OK : DPU_ERR_INVALID_SYMBOL_ACCESS);
+  auto *matrix = _registered_transfers[transfer_id];
 
-  dpu_transfer_matrix matrix;
-  auto mem_type = fill_transfer_matrix(&matrix, symbol_id, symbol_offset, length);
-  using copy_fn_type = dpu_error_t (*)(dpu_rank_t*, dpu_transfer_matrix*);
-  const auto copy_fn = (copy_fn_type)get_copy_fn(mem_type, true);
-
-  // Fill ptr
-  {
-    struct dpu_t *dpu;
-    int each_dpu = 0;
-    STRUCT_DPU_FOREACH(_rank, dpu) {
-      if (dpu_is_enabled(dpu)) {
-        matrix.ptr[each_dpu] = buffer;
-      }
-      else {
-        matrix.ptr[each_dpu] = nullptr;
-      }
-      ++each_dpu;
-    }
-  }
-
-  DPU_ASSERT(copy_fn(_rank, &matrix));
+  // Backup offset
+  const uint32_t original_address = matrix->offset;
+  
+  // Adjust offset & Select copy function
+  memory_type mem_type = fill_transfer_matrix(matrix, symbol_offset, length);
+  const auto copy_fn = (dpu_error_t (*)(dpu_rank_t*,dpu_transfer_matrix*))
+    get_copy_fn(mem_type, direction_to_dpu);
+  
+  // Do copy
+  DPU_ASSERT(copy_fn(_rank, matrix));
+  
+  // Restore offset
+  matrix->offset = original_address;
 }
 
 static std::mutex log_print_mutex;
@@ -208,16 +201,14 @@ void rank::log_read(FILE *stream, bool fault_only, int dpu_id) {
 }
 
 rank::memory_type rank::fill_transfer_matrix(dpu_transfer_matrix *matrix,
-    uint32_t symbol_id, uint32_t symbol_offset, uint32_t length) {
-  memset(matrix, 0, sizeof(*matrix));
-
+    uint32_t symbol_offset, uint32_t length) {
   // Symbol type
   struct _mask_align {dpu_mem_max_addr_t mask, align; memory_type type;};
   constexpr _mask_align IRAM = {0x80000000u, 3u, memory_type::IRAM};
   constexpr _mask_align MRAM = {0x08000000u, 0u, memory_type::MRAM};
   constexpr _mask_align WRAM = {0x00000000u, 2u, memory_type::WRAM};
 
-  dpu_mem_max_addr_t address = _registered_symbols[symbol_id].address;
+  dpu_mem_max_addr_t address = matrix->offset;
   _mask_align mem_type =
     ((address & IRAM.mask) == IRAM.mask) ? IRAM :
     (((address & MRAM.mask) == MRAM.mask) ? MRAM : WRAM);

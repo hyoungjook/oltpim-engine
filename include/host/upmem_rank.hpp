@@ -21,11 +21,10 @@ class rank {
   bool launch(bool async = false);
   bool is_done(bool *fault = nullptr);
 
-  uint32_t register_dpu_symbol(const char *symbol);
-  void copy(uint32_t symbol_id, void **buffers, uint32_t length,
+  uint32_t register_dpu_transfer(const char *symbol, void **buffers,
+    bool broadcast = false);
+  void copy(uint32_t transfer_id, uint32_t length,
     bool direction_to_dpu, uint32_t symbol_offset = 0);
-  void broadcast(uint32_t symbol_id, void *buffer, uint32_t length,
-    uint32_t symbol_offset = 0);
 
   void log_read(FILE *stream, bool fault_only = false, int dpu_id = -1);
 
@@ -43,7 +42,7 @@ class rank {
   };
 
   inline memory_type fill_transfer_matrix(dpu_transfer_matrix *matrix,
-    uint32_t symbol_id, uint32_t symbol_offset, uint32_t length);
+    uint32_t symbol_offset, uint32_t length);
   inline void *get_copy_fn(memory_type mem_type, bool direction_to_dpu);
 
   struct dpu_rank_t *_rank;
@@ -53,10 +52,7 @@ class rank {
   struct dpu_program_t *_program;
   const char *_binary_path;
 
-  struct dpu_symbol_info {
-    uint32_t address, size;
-  };
-  std::vector<dpu_symbol_info> _registered_symbols;
+  std::vector<dpu_transfer_matrix*> _registered_transfers;
   static std::mutex _alloc_mutex;
 };
 

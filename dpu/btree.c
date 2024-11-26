@@ -10,6 +10,19 @@
 #include <stddef.h>
 #include <stdio.h>
 
+/**
+ * This should be defined at the alphabetically first file
+ * in order to place a buffer on the first 8B of MRAM (0x08000000).
+ * It seems that those 8B are intermittently modified
+ * by the system library for whatever reason.
+ */
+__mram_noinit uint64_t do_nothing_buf;
+void check_do_nothing_buf() {
+  const uint32_t addr = (uint32_t)&do_nothing_buf;
+  assert(addr == 0x0);
+  (void)addr;
+}
+
 /* Configs */
 #define DEGREE_RIGHT ((BT_DEGREE) / 2)
 #define DEGREE_LEFT ((BT_DEGREE) - (DEGREE_RIGHT))

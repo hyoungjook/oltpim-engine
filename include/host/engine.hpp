@@ -100,8 +100,8 @@ class rank_engine {
   inline upmem::rank &get_rank() {return _rank;}
 
  private:
-  static constexpr uint32_t dpu_args_symbol_id = 0;
-  static constexpr uint32_t dpu_rets_symbol_id = 1;
+  static constexpr uint32_t dpu_args_transfer_id = 0;
+  static constexpr uint32_t dpu_rets_transfer_id = 1;
 
   int _rank_id;
   int _num_dpus;

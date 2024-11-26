@@ -46,6 +46,8 @@ static inline void args_read_content(
   #undef ROUNDUP8
 }
 
+extern void check_do_nothing_buf();
+
 int main() {
   // Per-thread buffer for argument reader
   __dma_aligned uint8_t args_reader_cache[REQUEST_MAX_ARGS_SIZE + 8];
@@ -54,6 +56,7 @@ int main() {
     // Initialize
     if (!initialized) {
       process_init_global();
+      check_do_nothing_buf();
       initialized = true;
     }
 
