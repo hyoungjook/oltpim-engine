@@ -1,4 +1,5 @@
 #include "upmem_rank.hpp"
+#include "upmem_direct.hpp"
 
 extern "C" {
   #include <dpu.h>
@@ -144,6 +145,9 @@ void rank::copy(uint32_t symbol_id, void **buffers, uint32_t length,
         matrix.ptr[each_dpu] = buffers[each_enabled_dpu];
         ++each_enabled_dpu;
       }
+      else {
+        matrix.ptr[each_dpu] = nullptr;
+      }
       ++each_dpu;
     }
     DPU_ASSERT(each_enabled_dpu == _num_dpus ? DPU_OK : DPU_ERR_INTERNAL);
@@ -169,6 +173,9 @@ void rank::broadcast(uint32_t symbol_id, void *buffer, uint32_t length,
     STRUCT_DPU_FOREACH(_rank, dpu) {
       if (dpu_is_enabled(dpu)) {
         matrix.ptr[each_dpu] = buffer;
+      }
+      else {
+        matrix.ptr[each_dpu] = nullptr;
       }
       ++each_dpu;
     }
@@ -226,9 +233,11 @@ void *rank::get_copy_fn(memory_type mem_type, bool direction_to_dpu) {
   switch (mem_type) {
   case memory_type::MRAM: {
     if (direction_to_dpu)
-      return (void*)dpu_copy_to_mrams;              // MRAM, CPU_TO_PIM
+      //return (void*)dpu_copy_to_mrams;              // MRAM, CPU_TO_PIM
+      return (void*)upmem::direct::copy_to_mrams;
     else
-      return (void*)dpu_copy_from_mrams;            // MRAM, PIM_TO_CPU
+      //return (void*)dpu_copy_from_mrams;            // MRAM, PIM_TO_CPU
+      return (void*)upmem::direct::copy_from_mrams;
   }
   case memory_type::WRAM: {
     if (direction_to_dpu)

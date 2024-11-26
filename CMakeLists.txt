@@ -49,7 +49,7 @@ execute_process(COMMAND dpu-pkg-config --libs dpu
 set(CFLAGS
   ${COMMON_CFLAGS} ${CFLAGS_DPU_CONFIG}
   -DDPU_BINARY=\"${DPU_BINARY_PATH}\"
-  -std=c++20 -fcoroutines
+  -std=c++20 -fcoroutines -march=native
 )
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -DNSTATS -g")
