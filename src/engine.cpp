@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <algorithm>
+#include <iostream>
 #include <numa.h>
 #include <assert.h>
 #include <unistd.h>
@@ -131,6 +132,12 @@ int rank_engine::init(config conf, information info) {
   _rank.init(conf.dpu_rank);
   _rank.load(info.dpu_binary);
   _num_dpus = _rank.num_dpus();
+  if (_num_dpus != NUM_DPUS_PER_RANK) {
+    std::cerr << "oltpim-engine assumes all DPUs in a rank are enabled.\n";
+    std::cerr << "rank[" << _rank_id << "] has only " << _num_dpus <<
+      " DPUs available.\n";
+    std::abort();
+  }
 
   // Request list
   _num_numa_nodes = info.num_numa_nodes;
@@ -316,69 +323,63 @@ void engine::init(config conf) {
   _num_ranks = _num_ranks_per_numa_node * _num_numa_nodes;
   rank_info.num_numa_nodes = _num_numa_nodes;
 
-  // Allocate all physical ranks
-  std::vector<void*> dpu_ranks;
+  // Allocate all physical ranks, filter out ranks per numa node
+  std::vector<std::vector<void*>> dpu_ranks(_num_numa_nodes);
+  std::vector<void*> overfull_dpu_ranks;
   while (true) {
     void *dpu_rank = upmem::rank::static_alloc();
     if (!dpu_rank) break;
-    dpu_ranks.push_back(dpu_rank);
-  }
-
-  // Filter out ranks per numa node
-  int rank_count_per_numa_node[_num_numa_nodes];
-  memset(&rank_count_per_numa_node, 0, sizeof(int) * _num_numa_nodes);
-  for (void* &dpu_rank: dpu_ranks) {
     int numa_id = upmem::rank::numa_node_of(dpu_rank);
-    if (rank_count_per_numa_node[numa_id] >= _num_ranks_per_numa_node) {
-      upmem::rank::static_free(dpu_rank);
-      dpu_rank = nullptr;
+    assert(0 <= numa_id && numa_id < _num_numa_nodes);
+    if (dpu_ranks[numa_id].size() < (size_t)_num_ranks_per_numa_node) {
+      dpu_ranks[numa_id].push_back(dpu_rank);
     }
     else {
-      ++rank_count_per_numa_node[numa_id];
+      overfull_dpu_ranks.push_back(dpu_rank);
     }
   }
+  for (void *overfull_rank: overfull_dpu_ranks) {
+    upmem::rank::static_free(overfull_rank);
+  }
+  overfull_dpu_ranks.clear();
   // Check if enough ranks available per numa node
   for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-    if (rank_count_per_numa_node[each_node] != _num_ranks_per_numa_node) {
-      fprintf(stderr, "Numa node %d doesn't have enough PIM ranks: %d < %d\n",
-        each_node, rank_count_per_numa_node[each_node], _num_ranks_per_numa_node);
-      for (void *dpu_rank: dpu_ranks) {
-        if (dpu_rank) upmem::rank::static_free(dpu_rank);
+    if (dpu_ranks[each_node].size() != (size_t)_num_ranks_per_numa_node) {
+      std::cerr << "NUMA node " << each_node << "doesn't have enough PIM ranks: " <<
+        dpu_ranks[each_node].size() << " < " << _num_ranks_per_numa_node << "\n";
+      for (auto &ranks: dpu_ranks) {
+        for (void *rank: ranks) {
+          upmem::rank::static_free(rank);
+        }
       }
-      exit(1);
+      std::abort();
     }
   }
-  /*printf("Allocated PIM ranks: ");
-  for (void *&dpu_rank: dpu_ranks) {
-    printf("%d", dpu_rank != nullptr ? 1 : 0);
-  }
-  printf("\n");*/
-  // Erase nullptrs
-  dpu_ranks.erase(std::remove_if(dpu_ranks.begin(), dpu_ranks.end(),
-    [](const void *dpu_rank){return dpu_rank == nullptr;}), dpu_ranks.end());
-  OLTPIM_ASSERT(dpu_ranks.size() == (size_t)_num_ranks);
 
   // Allocate rank engines
   _rank_engines = std::vector<rank_engine>(_num_ranks);
   _num_dpus = 0;
-  _num_dpus_per_rank = std::vector<int>(_num_ranks);
-  _numa_id_to_rank_ids = std::vector<std::vector<int>>(_num_numa_nodes);
-  for (int each_rank = 0; each_rank < _num_ranks; ++each_rank) {
-    rank_engine::config rank_config;
-    rank_config.dpu_rank = dpu_ranks[each_rank];
-    rank_config.num_indexes = (uint32_t)_index_infos.size();
-    memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
-    rank_config.alloc_fn = conf.alloc_fn;
-    auto &re = _rank_engines[each_rank];
-    rank_info.rank_id = each_rank;
-    int num_dpus_this_rank = re.init(
-      rank_config, rank_info
-    );
-    _num_dpus += num_dpus_this_rank;
-    _num_dpus_per_rank[each_rank] = num_dpus_this_rank;
-    assert(num_dpus_this_rank <= 255); // ensure dpu_id is uint8_t
-    _numa_id_to_rank_ids[re.get_rank().numa_node()].push_back(each_rank);
+  int rank_id = 0;
+  for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+    assert(dpu_ranks[each_node].size() == (size_t)_num_ranks_per_numa_node);
+    for (int each_rank = 0; each_rank < _num_ranks_per_numa_node; ++each_rank) {
+      rank_engine::config rank_config;
+      rank_config.dpu_rank = dpu_ranks[each_node][each_rank];
+      rank_config.num_indexes = (uint32_t)_index_infos.size();
+      memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
+      rank_config.alloc_fn = conf.alloc_fn;
+      rank_info.rank_id = rank_id;
+      auto &re = _rank_engines[rank_id];
+      int num_dpus_this_rank = re.init(rank_config, rank_info);
+      _num_dpus += num_dpus_this_rank;
+      assert(num_dpus_this_rank == NUM_DPUS_PER_RANK); // assume all DPUs are enabled
+      assert(num_dpus_this_rank <= 255); // ensure dpu_id is uint8_t
+      ++rank_id;
+    }
   }
+  OLTPIM_ASSERT(rank_id == _num_ranks);
+  OLTPIM_ASSERT(_num_dpus == _num_ranks * (int)NUM_DPUS_PER_RANK);
+  _num_dpus_per_numa_node = _num_dpus / _num_numa_nodes;
 
   printf("Engine initialized for %d NUMA node(s) x %d PIM rank(s) (total %d DPUs)\n",
     _num_numa_nodes, _num_ranks_per_numa_node, _num_dpus);
@@ -419,17 +420,9 @@ void engine::print_log(int pim_id) {
 
 void engine::pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_id) {
   assert(0 <= pim_id && pim_id < _num_dpus);
-  int dpu_cnt = 0;
-  for (int r = 0; r < _num_ranks; ++r) {
-    int num_dpus_this_rank = _num_dpus_per_rank[r];
-    if (pim_id < dpu_cnt + num_dpus_this_rank) {
-      rank_id = (uint16_t)r;
-      dpu_id = (uint8_t)(pim_id - dpu_cnt);
-      return;
-    }
-    dpu_cnt += num_dpus_this_rank;
-  }
-  assert(false);
+  // Simple division, as we assume all DPUs are enabled
+  rank_id = (uint16_t)((uint32_t)pim_id / NUM_DPUS_PER_RANK);
+  dpu_id = (uint8_t)((uint32_t)pim_id % NUM_DPUS_PER_RANK);
 }
 
 rank_engine::stats engine::get_stats() {

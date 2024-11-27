@@ -97,9 +97,9 @@ class rank_engine {
 
   void print_log(int dpu_id = -1);
 
-  inline upmem::rank &get_rank() {return _rank;}
-
  private:
+  friend class engine;
+  static constexpr uint32_t NUM_DPUS_PER_RANK = 64;
   static constexpr uint32_t dpu_args_transfer_id = 0;
   static constexpr uint32_t dpu_rets_transfer_id = 1;
 
@@ -176,8 +176,9 @@ class engine {
   template <typename req_t>
   inline bool is_done(req_t *req) {return is_done((request_base*)req);}
 
-  inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id].get_rank();}
+  inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id]._rank;}
   inline int num_pims() {return _num_dpus;}
+  inline int num_pims_per_numa_node() {return _num_dpus_per_numa_node;}
 
   rank_engine::stats get_stats();
 
@@ -189,19 +190,15 @@ class engine {
 
   // properties
   friend class rank_engine;
+  static constexpr uint32_t NUM_DPUS_PER_RANK = rank_engine::NUM_DPUS_PER_RANK;
   int _num_ranks_per_numa_node;
   int _num_numa_nodes;
   int _num_ranks;
   std::vector<rank_engine> _rank_engines;
 
   // Structures for pim_id -> (rank_id, dpu_id)
-  int _num_dpus;
-  std::vector<int> _num_dpus_per_rank;
+  int _num_dpus, _num_dpus_per_numa_node;
   inline void pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_id);
-
-  // Structures for numa_node_id -> [rank_id]s
-  std::vector<std::vector<int>> _numa_id_to_rank_ids;
-
 };
 
 }
