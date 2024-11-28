@@ -40,9 +40,9 @@ struct request_norets {
 };
 
 struct alignas(CACHE_LINE) rank_buffer {
-  using buf_alloc_fn = void*(*)(size_t);
+  using buf_alloc_fn = void*(*)(size_t,int);
   rank_buffer() {}
-  void alloc(int num_dpus, buf_alloc_fn alloc_fn);
+  void alloc(int num_dpus, buf_alloc_fn alloc_fn, int numa_id);
   ~rank_buffer();
 
   inline void reset_offsets(bool both);

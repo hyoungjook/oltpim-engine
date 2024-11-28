@@ -23,25 +23,25 @@ REQUEST_TYPES_LIST(REQUEST_TYPE_PRIORITY)
 #undef REQUEST_TYPE_PRIORITY
 };
 
-void rank_buffer::alloc(int num_dpus, buf_alloc_fn alloc_fn) {
+void rank_buffer::alloc(int num_dpus, buf_alloc_fn alloc_fn, int numa_id) {
   _num_dpus = num_dpus;
   if (!alloc_fn) {
-    alloc_fn = [](size_t size) -> void* {
-      return (void*)aligned_alloc(CACHE_LINE, size);
+    alloc_fn = [](size_t size, int node) -> void* {
+      return numa_alloc_onnode(size, node);
     };
   }
 
-  auto aligned_alloc_fn = [&](size_t align, size_t size) -> void* {
-    uintptr_t underlying = (uintptr_t)alloc_fn(size + align);
+  auto aligned_alloc_fn = [&](size_t align, size_t size, int node) -> void* {
+    uintptr_t underlying = (uintptr_t)alloc_fn(size + align, node);
     underlying = (underlying + align - 1) / align * align;
     return (void*)underlying;
   };
 
   bufs = (uint8_t**)malloc(sizeof(uint8_t*) * num_dpus);
   for (int each_dpu = 0; each_dpu < num_dpus; ++each_dpu) {
-    bufs[each_dpu] = (uint8_t*)aligned_alloc_fn(CACHE_LINE, DPU_BUFFER_SIZE);
+    bufs[each_dpu] = (uint8_t*)aligned_alloc_fn(CACHE_LINE, DPU_BUFFER_SIZE, numa_id);
   }
-  offsets = (uint32_t*)aligned_alloc(CACHE_LINE, 2 * sizeof(uint32_t) * num_dpus);
+  offsets = (uint32_t*)aligned_alloc_fn(CACHE_LINE, 2 * sizeof(uint32_t) * num_dpus, numa_id);
   rets_offsets = &offsets[num_dpus];
   reset_offsets(true);
 }
@@ -147,7 +147,7 @@ int rank_engine::init(config conf, information info) {
   }
 
   // Buffers
-  _buffer.alloc(_num_dpus, conf.alloc_fn);
+  _buffer.alloc(_num_dpus, conf.alloc_fn, _rank.numa_node());
 
   // Register transfers in advance
   {
