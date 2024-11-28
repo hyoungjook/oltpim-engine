@@ -182,6 +182,7 @@ int rank_engine::init(config conf, information info) {
   // Lock
   _process_lock.store(false);
   _process_phase = 0;
+  _process_collect_only_numa_local_requests = false;
 
   // Return number of dpus
   return _num_dpus;
@@ -204,8 +205,17 @@ void rank_engine::process() {
       _saved_requests = nullptr;
       request_base *last_req = nullptr;
       bool something_exists = false;
+      assert(
+        (!_process_collect_only_numa_local_requests) ||
+        (my_numa_id == _rank.numa_node())
+      ); // on numa_local_key option, process() should be only called from numa-local thread.
       for (int priority = 0; priority < num_priorities; ++priority) {
         for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+          if (_process_collect_only_numa_local_requests && (each_node != my_numa_id)) {
+            // This prevents the below move() function to do unnecessary
+            // atomic exchange on numa-remote variable.
+            continue;
+          }
           request_base *req = _request_lists_per_numa[each_node][priority].move();
           if (req && !something_exists) {
             // lazy buffer initialization
@@ -396,6 +406,12 @@ void engine::init(config conf) {
 
   printf("Engine initialized for %d NUMA node(s) x %d PIM rank(s) (total %d DPUs)\n",
     _num_numa_nodes, _num_ranks_per_numa_node, _num_dpus);
+}
+
+void engine::optimize_for_numa_local_key() {
+  for (auto *re: _rank_engines) {
+    re->_process_collect_only_numa_local_requests = true;
+  }
 }
 
 void engine::register_worker_thread(int sys_core_id) {

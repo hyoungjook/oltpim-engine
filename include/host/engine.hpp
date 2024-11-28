@@ -123,6 +123,9 @@ class rank_engine {
   // Process locks
   std::atomic<bool> _process_lock;
   int _process_phase;
+  // Ignores requests from the workers in other numa nodes.
+  // enable this only if using numa_local_key option.
+  bool _process_collect_only_numa_local_requests;
 
 public:
   // Statistics
@@ -163,6 +166,7 @@ class engine {
     rank_buffer::buf_alloc_fn alloc_fn;
   };
   void init(config conf);
+  void optimize_for_numa_local_key();
 
   void register_worker_thread(int sys_core_id);
 
