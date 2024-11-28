@@ -192,14 +192,13 @@ void rank_engine::push(request_base *req) {
   _request_lists_per_numa[my_numa_id][priority].push(req);
 }
 
-bool rank_engine::process() {
+void rank_engine::process() {
   bool lock_acquired = false;
-  bool something_exists = false;
   // Try acquire spinlock for this rank
-  if (_process_lock.compare_exchange_strong(lock_acquired, true)) {
-    if (_process_phase == 0) {
-      // Phase 0: Push args and launch PIM program asynchronously
-      // Then move to phase 1
+  if (_process_lock.compare_exchange_weak(lock_acquired, true)) {
+    switch (_process_phase) {
+    case 0: {
+      // Phase 0: Push args and launch
 
       // Construct buffer & saved_requests (linked list of all requests)
       _saved_requests = nullptr;
@@ -259,10 +258,10 @@ bool rank_engine::process() {
         // Move to phase 1
         _process_phase = 1;
       }
-    }
-    else if (_process_phase == 1) {
+    } break;
+    case 1: {
       // Phase 1: Check if PIM program is done
-      // If it's done, distribute return values and move to phase 0
+      // Then distribute return values and move to phase 0
 
       // Check done
       bool pim_fault = false;
@@ -276,6 +275,7 @@ bool rank_engine::process() {
       }
       if (pim_done) {
         //_rank.log_read(stdout); // debug
+
         // Copy rets from rank
         _rank.copy(dpu_rets_transfer_id, _buffer.max_rlength, false);
 
@@ -289,13 +289,12 @@ bool rank_engine::process() {
 
         // Move to phase 0
         _process_phase = 0;
-        something_exists = true;
       }
+    } break;
     }
     // Release spinlock
     _process_lock.store(false);
   }
-  return something_exists;
 }
 
 void rank_engine::print_log(int dpu_id) {

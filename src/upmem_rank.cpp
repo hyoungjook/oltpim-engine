@@ -166,15 +166,16 @@ void rank::copy(uint32_t transfer_id, uint32_t length, bool direction_to_dpu, ui
 
   // Backup offset
   const uint32_t original_address = matrix->offset;
-  
+
   // Adjust offset & Select copy function
   memory_type mem_type = fill_transfer_matrix(matrix, symbol_offset, length);
   const auto copy_fn = (dpu_error_t (*)(dpu_rank_t*,dpu_transfer_matrix*))
     get_copy_fn(mem_type, direction_to_dpu);
-  
+
   // Do copy
+  mux::switch_rank(_rank, true);
   DPU_ASSERT(copy_fn(_rank, matrix));
-  
+
   // Restore offset
   matrix->offset = original_address;
 }

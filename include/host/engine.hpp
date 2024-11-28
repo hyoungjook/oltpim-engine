@@ -95,7 +95,7 @@ class rank_engine {
   inline void push(request_base *req);
 
   // Process requests; if conflict, do nothing
-  bool process();
+  void process();
 
   void print_log(int dpu_id = -1);
 
