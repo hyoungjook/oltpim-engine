@@ -41,6 +41,8 @@ struct request_norets {
 
 struct alignas(CACHE_LINE) rank_buffer {
   using buf_alloc_fn = void*(*)(size_t,int);
+  static auto wrap_alloc_fn(buf_alloc_fn alloc_fn);
+
   rank_buffer() {}
   void alloc(int num_dpus, buf_alloc_fn alloc_fn, int numa_id);
   ~rank_buffer();
@@ -112,7 +114,7 @@ class rank_engine {
 
   // Request list
   static constexpr int num_priorities = NUM_PRIORITIES;
-  std::vector<array<request_list>> _request_lists_per_numa;
+  std::vector<request_list*> _request_lists_per_numa;
 
   // PIM buffer
   rank_buffer _buffer;
@@ -176,7 +178,7 @@ class engine {
   template <typename req_t>
   inline bool is_done(req_t *req) {return is_done((request_base*)req);}
 
-  inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id]._rank;}
+  inline upmem::rank &get_rank(int rank_id) {return _rank_engines[rank_id]->_rank;}
   inline int num_pims() {return _num_dpus;}
   inline int num_pims_per_numa_node() {return _num_dpus_per_numa_node;}
 
@@ -194,7 +196,7 @@ class engine {
   int _num_ranks_per_numa_node;
   int _num_numa_nodes;
   int _num_ranks;
-  std::vector<rank_engine> _rank_engines;
+  std::vector<rank_engine*> _rank_engines;
 
   // Structures for pim_id -> (rank_id, dpu_id)
   int _num_dpus, _num_dpus_per_numa_node;

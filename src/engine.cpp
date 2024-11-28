@@ -23,25 +23,29 @@ REQUEST_TYPES_LIST(REQUEST_TYPE_PRIORITY)
 #undef REQUEST_TYPE_PRIORITY
 };
 
-void rank_buffer::alloc(int num_dpus, buf_alloc_fn alloc_fn, int numa_id) {
-  _num_dpus = num_dpus;
+auto rank_buffer::wrap_alloc_fn(buf_alloc_fn alloc_fn) {
   if (!alloc_fn) {
     alloc_fn = [](size_t size, int node) -> void* {
       return numa_alloc_onnode(size, node);
     };
   }
-
-  auto aligned_alloc_fn = [&](size_t align, size_t size, int node) -> void* {
+  return [alloc_fn](size_t size, int node) -> void* {
+    static constexpr size_t align = CACHE_LINE;
     uintptr_t underlying = (uintptr_t)alloc_fn(size + align, node);
     underlying = (underlying + align - 1) / align * align;
     return (void*)underlying;
   };
+}
+
+void rank_buffer::alloc(int num_dpus, buf_alloc_fn alloc_fn, int numa_id) {
+  _num_dpus = num_dpus;
+  auto wrapped_alloc_fn = wrap_alloc_fn(alloc_fn);
 
   bufs = (uint8_t**)malloc(sizeof(uint8_t*) * num_dpus);
   for (int each_dpu = 0; each_dpu < num_dpus; ++each_dpu) {
-    bufs[each_dpu] = (uint8_t*)aligned_alloc_fn(CACHE_LINE, DPU_BUFFER_SIZE, numa_id);
+    bufs[each_dpu] = (uint8_t*)wrapped_alloc_fn(DPU_BUFFER_SIZE, numa_id);
   }
-  offsets = (uint32_t*)aligned_alloc_fn(CACHE_LINE, 2 * sizeof(uint32_t) * num_dpus, numa_id);
+  offsets = (uint32_t*)wrapped_alloc_fn(2 * sizeof(uint32_t) * num_dpus, numa_id);
   rets_offsets = &offsets[num_dpus];
   reset_offsets(true);
 }
@@ -141,9 +145,14 @@ int rank_engine::init(config conf, information info) {
 
   // Request list
   _num_numa_nodes = info.num_numa_nodes;
-  _request_lists_per_numa = std::vector<array<request_list>>(_num_numa_nodes);
-  for (auto &rl: _request_lists_per_numa) {
-    rl.alloc(num_priorities);
+  auto wrapped_alloc_fn = rank_buffer::wrap_alloc_fn(conf.alloc_fn);
+  _request_lists_per_numa = std::vector<request_list*>(_num_numa_nodes);
+  for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+    auto *rl = (request_list*)wrapped_alloc_fn(sizeof(request_list) * num_priorities, each_node);
+    for (int p = 0; p < num_priorities; ++p) {
+      new (&rl[p]) request_list;
+    }
+    _request_lists_per_numa[each_node] = rl;
   }
 
   // Buffers
@@ -357,23 +366,28 @@ void engine::init(config conf) {
   }
 
   // Allocate rank engines
-  _rank_engines = std::vector<rank_engine>(_num_ranks);
+  _rank_engines = std::vector<rank_engine*>(_num_ranks);
   _num_dpus = 0;
   int rank_id = 0;
+  auto wrapped_alloc_fn = rank_buffer::wrap_alloc_fn(conf.alloc_fn);
   for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
     assert(dpu_ranks[each_node].size() == (size_t)_num_ranks_per_numa_node);
     for (int each_rank = 0; each_rank < _num_ranks_per_numa_node; ++each_rank) {
+      // fill config and info
       rank_engine::config rank_config;
       rank_config.dpu_rank = dpu_ranks[each_node][each_rank];
       rank_config.num_indexes = (uint32_t)_index_infos.size();
       memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
       rank_config.alloc_fn = conf.alloc_fn;
       rank_info.rank_id = rank_id;
-      auto &re = _rank_engines[rank_id];
-      int num_dpus_this_rank = re.init(rank_config, rank_info);
+      // allocate rank_engine in its local numa node
+      auto* re = (rank_engine*)wrapped_alloc_fn(sizeof(rank_engine), each_node);
+      new (re) rank_engine();
+      int num_dpus_this_rank = re->init(rank_config, rank_info);
       _num_dpus += num_dpus_this_rank;
       assert(num_dpus_this_rank == NUM_DPUS_PER_RANK); // assume all DPUs are enabled
       assert(num_dpus_this_rank <= 255); // ensure dpu_id is uint8_t
+      _rank_engines[rank_id] = re;
       ++rank_id;
     }
   }
@@ -394,27 +408,27 @@ void engine::push(int pim_id, request_base *req) {
   // Push to the rank engine
   pim_id_to_rank_dpu_id(pim_id, req->rank_id, req->dpu_id);
   req->done.store(false, std::memory_order_release);
-  _rank_engines[req->rank_id].push(req);
+  _rank_engines[req->rank_id]->push(req);
 }
 
 bool engine::is_done(request_base *req) {
   assert(_initialized);
   if (req->done.load(std::memory_order_acquire)) return true;
-  _rank_engines[req->rank_id].process();
+  _rank_engines[req->rank_id]->process();
   return req->done.load(std::memory_order_acquire);
 }
 
 void engine::print_log(int pim_id) {
   if (pim_id < 0) {
     for (auto &re: _rank_engines) {
-      re.print_log();
+      re->print_log();
     }
   }
   else {
     uint16_t rank_id = 0;
     uint8_t dpu_id = 0;
     pim_id_to_rank_dpu_id(pim_id, rank_id, dpu_id);
-    _rank_engines[rank_id].print_log((int)dpu_id);
+    _rank_engines[rank_id]->print_log((int)dpu_id);
   }
 }
 
@@ -428,7 +442,7 @@ void engine::pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_i
 rank_engine::stats engine::get_stats() {
   rank_engine::stats s;
   for (auto &re: _rank_engines) {
-    s += re.stat;
+    s += re->stat;
   }
   s /= _num_ranks;
   return s;

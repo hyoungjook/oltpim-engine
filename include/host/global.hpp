@@ -33,41 +33,4 @@ static inline uint64_t now_us() {
   return ((uint64_t)tv.tv_sec) * 1000000 + tv.tv_usec;
 }
 
-// Structures
-template <class T>
-class array {
- public:
-  array() {}
-  array(size_t num_elems) {
-    alloc(num_elems);
-  }
-  void alloc(size_t num_elems) {
-    _num_elems = num_elems;
-    _arr = (T*)aligned_alloc(CACHE_LINE, sizeof(T) * num_elems);
-    for (size_t each_elem = 0; each_elem < num_elems; ++each_elem) {
-      new (&_arr[each_elem]) T();
-    }
-  }
-  array(array&& other) {
-    _num_elems = other._num_elems;
-    _arr = other._arr;
-    other._arr = nullptr;
-  }
-  ~array() {
-    if (_arr) {
-      for (size_t each_elem = 0; each_elem < _num_elems; ++each_elem) {
-        _arr[each_elem].~T();
-      }
-      free(_arr);
-    }
-  }
-
-  inline T& operator[](size_t idx) {return _arr[idx];}
-  inline const T& operator[](size_t idx) const {return _arr[idx];}
-  inline size_t size() {return _num_elems;}
- private:
-  size_t _num_elems;
-  T *_arr = nullptr;
-};
-
 }
