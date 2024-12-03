@@ -21,6 +21,8 @@ public:
     : req_type(req_type_), alen(alen_), rlen(rlen_) {}
   inline void *args() {return (void*)(this + 1);}
   inline void *rets() {return (void*)(((uint8_t*)(this + 1)) + alen);}
+  inline void mark_done() {done.store(true, std::memory_order_release);}
+  inline bool is_done() {return done.load(std::memory_order_acquire);}
 };
 
 template <request_type_t TYPE, typename arg_t, typename ret_t>
@@ -55,7 +57,7 @@ struct alignas(CACHE_LINE) rank_buffer {
   inline void finalize_args();
 
   // Distributing the rets buffer
-  inline void pop_rets(request_base *req);
+  inline request_base *pop_rets(request_base *req);
 
   int _num_dpus;
   uint8_t **bufs = nullptr;
@@ -121,7 +123,7 @@ class rank_engine {
   request_base *_saved_requests;
 
   // Process locks
-  std::atomic<bool> _process_lock;
+  std::atomic_flag _process_lock;
   int _process_phase;
   // Ignores requests from the workers in other numa nodes.
   // enable this only if using numa_local_key option.

@@ -68,7 +68,7 @@ void rank_buffer::reset_offsets(bool both) {
 }
 
 void rank_buffer::push_args(request_base *req) {
-  assert(!req->done.load(std::memory_order_acquire));
+  assert(!req->is_done());
   const uint32_t dpu_id = req->dpu_id;
   const uint8_t alen = req->alen;
   // First sizeof(uint32_t) bytes stores the offset 
@@ -103,14 +103,14 @@ void rank_buffer::finalize_args() {
   max_rlength = ALIGN8(max_rlength);
 }
 
-void rank_buffer::pop_rets(request_base *req) {
+request_base *rank_buffer::pop_rets(request_base *req) {
   const uint32_t dpu_id = req->dpu_id;
   const uint8_t rlen = req->rlen;
   // no-return requests are already popped before launch()
   assert(rlen > 0);
   memcpy(req->rets(), &bufs[dpu_id][offsets[dpu_id]], rlen);
   offsets[dpu_id] += rlen;
-  req->done.store(true, std::memory_order_release);
+  return req->next;
 }
 
 request_list::request_list() {
@@ -180,7 +180,7 @@ int rank_engine::init(config conf, information info) {
   }
 
   // Lock
-  _process_lock.store(false);
+  _process_lock.clear();
   _process_phase = 0;
   _process_collect_only_numa_local_requests = false;
 
@@ -194,9 +194,8 @@ void rank_engine::push(request_base *req) {
 }
 
 void rank_engine::process() {
-  bool lock_acquired = false;
   // Try acquire spinlock for this rank
-  if (_process_lock.compare_exchange_weak(lock_acquired, true)) {
+  if (!_process_lock.test_and_set(std::memory_order_acquire)) {
     switch (_process_phase) {
     case 0: {
       // Phase 0: Push args and launch
@@ -226,6 +225,7 @@ void rank_engine::process() {
             }
           }
           while (req) {
+            assert(req->rank_id == (uint16_t)_rank_id);
             // target of the current iteration: *req
             // push req to buffer
             _buffer.push_args(req);
@@ -235,7 +235,7 @@ void rank_engine::process() {
             if (req->rlen == 0) {
               // if req has no return value, don't push to the global linked list
               // and mark done now
-              req->done.store(true, std::memory_order_release);
+              req->mark_done();
               if (last_req) {
                 last_req->next = req_next;
               }
@@ -293,8 +293,10 @@ void rank_engine::process() {
         _buffer.reset_offsets(false);
         request_base *req = _saved_requests;
         while (req) {
-          _buffer.pop_rets(req);
-          req = req->next;
+          assert(req->rank_id == (uint16_t)_rank_id);
+          auto *req_next = _buffer.pop_rets(req);
+          req->mark_done();
+          req = req_next;
         }
 
         // Move to phase 0
@@ -303,7 +305,7 @@ void rank_engine::process() {
     } break;
     }
     // Release spinlock
-    _process_lock.store(false);
+    _process_lock.clear(std::memory_order_release);
   }
 }
 
@@ -428,9 +430,9 @@ void engine::push(int pim_id, request_base *req) {
 
 bool engine::is_done(request_base *req) {
   assert(_initialized);
-  if (req->done.load(std::memory_order_acquire)) return true;
+  if (req->is_done()) return true;
   _rank_engines[req->rank_id]->process();
-  return req->done.load(std::memory_order_acquire);
+  return req->is_done();
 }
 
 void engine::print_log(int pim_id) {
