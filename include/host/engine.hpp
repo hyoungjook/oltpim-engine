@@ -54,6 +54,7 @@ struct alignas(CACHE_LINE) rank_buffer {
   // Constructing the args buffer
   inline void push_args(request_base *req);
   inline void push_priority_separator();
+  inline void push_gc_lsn(uint64_t gc_lsn);
   inline void finalize_args();
 
   // Distributing the rets buffer
@@ -82,6 +83,7 @@ class rank_engine {
     uint32_t num_indexes;
     index_info index_infos[DPU_MAX_NUM_INDEXES];
     rank_buffer::buf_alloc_fn alloc_fn;
+    bool enable_gc;
   };
   struct information { // info passed from parent engine
     int rank_id;
@@ -89,6 +91,7 @@ class rank_engine {
     const char *dpu_binary;
     const char *dpu_args_symbol, *dpu_rets_symbol;
     const char *dpu_num_indexes_symbol, *dpu_index_infos_symbol;
+    const char *dpu_enable_gc_symbol;
   };
   rank_engine() {}
   int init(config conf, information info);
@@ -129,6 +132,10 @@ class rank_engine {
   // enable this only if using numa_local_key option.
   bool _process_collect_only_numa_local_requests;
 
+  // GC
+  bool _enable_gc;
+  uint64_t _sent_gc_lsn, _recent_gc_lsn;
+
 public:
   // Statistics
   struct stats {
@@ -166,6 +173,8 @@ class engine {
     // allocation function for PIM buffers.
     // if nullptr, use default malloc.
     rank_buffer::buf_alloc_fn alloc_fn;
+    // Enable garbage collection?
+    bool enable_gc;
   };
   void init(config conf);
   void optimize_for_numa_local_key();
@@ -188,6 +197,7 @@ class engine {
   inline int num_pims() {return _num_dpus;}
   inline int num_pims_per_numa_node() {return _num_dpus_per_numa_node;}
 
+  void update_gc_lsn(uint64_t gc_lsn);
   rank_engine::stats get_stats();
 
  private:
@@ -203,6 +213,7 @@ class engine {
   int _num_numa_nodes;
   int _num_ranks;
   std::vector<rank_engine*> _rank_engines;
+  bool _enable_gc;
 
   // Structures for pim_id -> (rank_id, dpu_id)
   int _num_dpus, _num_dpus_per_numa_node;

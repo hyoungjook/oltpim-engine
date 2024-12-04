@@ -5,6 +5,7 @@
 #include <mutex.h>
 #include <mutex_pool.h>
 #include <stddef.h>
+#include "gc.h"
 
 /* Configs */
 #define VERSION_ALLOCATOR_SIZE (1UL << VERSION_ALLOCATOR_SIZE_BITS)
@@ -267,6 +268,32 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
         goto retry_with_vid;
       }
       *add_to_write_set = true;
+      // Successfully installed new version, try gc before return
+      if (gc_enabled) {
+        gc_lsn_t gc_lsn = gc_get_lsn();
+        vid = ver_buf.v.next;
+        bool collect = false;
+        while (vid != version_id_null) {
+          version_read(vid, &ver_buf);
+          const version_id_t vid_next = ver_buf.v.next;
+          if (!collect) {
+            if (ver_buf.v.csn <= gc_lsn) {
+              // This vid's begin_csn is older than gc_lsn
+              // collect all versions after this
+              collect = true;
+              // Nullify the chain end
+              if (ver_buf.v.next != version_id_null) {
+                ver_buf.v.next = version_id_null;
+                version_write(vid, &ver_buf);
+              }
+            }
+          }
+          else { // collect
+            version_free(vid);
+          }
+          vid = vid_next;
+        }
+      }
       return STATUS_SUCCESS;
     }
     else {

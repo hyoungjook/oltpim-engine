@@ -87,6 +87,16 @@ void rank_buffer::push_priority_separator() {
   }
 }
 
+void rank_buffer::push_gc_lsn(uint64_t gc_lsn) {
+  // assume args_gc_t is solely gc_lsn
+  for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
+    uint8_t *buf = &bufs[each_dpu][sizeof(uint32_t) + offsets[each_dpu]];
+    buf[0] = (uint8_t)request_type_gc;
+    memcpy(&buf[1], &gc_lsn, sizeof(uint64_t));
+    offsets[each_dpu] += (1 + sizeof(uint64_t));
+  }
+}
+
 void rank_buffer::finalize_args() {
   max_alength = 0;
   max_rlength = 0;
@@ -168,7 +178,7 @@ int rank_engine::init(config conf, information info) {
     OLTPIM_ASSERT(rets_transfer_id == dpu_rets_transfer_id);
   }
 
-  // Initialize index info
+  // Initialize index info & config
   {
     uint64_t num_indexes_buf = conf.num_indexes;
     uint32_t num_indexes_transfer_id = _rank.register_dpu_transfer(
@@ -177,12 +187,21 @@ int rank_engine::init(config conf, information info) {
       info.dpu_index_infos_symbol, (void**)(&conf.index_infos), true);
     _rank.copy(num_indexes_transfer_id, sizeof(uint64_t), true);
     _rank.copy(index_infos_transfer_id, sizeof(index_info) * DPU_MAX_NUM_INDEXES, true);
+    uint64_t enable_gc_buf = conf.enable_gc ? 1 : 0;
+    uint32_t enable_gc_transfer_id = _rank.register_dpu_transfer(
+      info.dpu_enable_gc_symbol, (void**)(&enable_gc_buf), true);
+    _rank.copy(enable_gc_transfer_id, sizeof(uint64_t), true);
   }
 
   // Lock
   _process_lock.clear();
   _process_phase = 0;
   _process_collect_only_numa_local_requests = false;
+
+  // GC
+  _enable_gc = conf.enable_gc;
+  _sent_gc_lsn = 0;
+  _recent_gc_lsn = 0;
 
   // Return number of dpus
   return _num_dpus;
@@ -260,6 +279,14 @@ void rank_engine::process() {
         }
       }
       if (something_exists) {
+        // Finalize buffers
+        if (_enable_gc) {
+          uint64_t recent_gc_lsn = *(volatile uint64_t*)&_recent_gc_lsn;
+          if (_sent_gc_lsn < recent_gc_lsn) {
+            _sent_gc_lsn = recent_gc_lsn;
+            _buffer.push_gc_lsn(recent_gc_lsn);
+          }
+        }
         _buffer.finalize_args();
         // Copy args to rank
         _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
@@ -336,6 +363,7 @@ void engine::init(config conf) {
   rank_info.dpu_rets_symbol = TOSTRING(DPU_RETS_SYMBOL);
   rank_info.dpu_num_indexes_symbol = TOSTRING(DPU_NUM_INDEXES_SYMBOL);
   rank_info.dpu_index_infos_symbol = TOSTRING(DPU_INDEX_INFOS_SYMBOL);
+  rank_info.dpu_enable_gc_symbol = TOSTRING(DPU_ENABLE_GC_SYMBOL);
 
   OLTPIM_ASSERT(numa_available() >= 0);
   _num_numa_nodes = numa_max_node() + 1;
@@ -390,6 +418,7 @@ void engine::init(config conf) {
       rank_config.num_indexes = (uint32_t)_index_infos.size();
       memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
       rank_config.alloc_fn = conf.alloc_fn;
+      rank_config.enable_gc = conf.enable_gc;
       rank_info.rank_id = rank_id;
       // allocate rank_engine in its local numa node
       auto* re = (rank_engine*)wrapped_alloc_fn(sizeof(rank_engine), each_node);
@@ -405,6 +434,7 @@ void engine::init(config conf) {
   OLTPIM_ASSERT(rank_id == _num_ranks);
   OLTPIM_ASSERT(_num_dpus == _num_ranks * (int)NUM_DPUS_PER_RANK);
   _num_dpus_per_numa_node = _num_dpus / _num_numa_nodes;
+  _enable_gc = conf.enable_gc;
 
   printf("Engine initialized for %d NUMA node(s) x %d PIM rank(s) (total %d DPUs)\n",
     _num_numa_nodes, _num_ranks_per_numa_node, _num_dpus);
@@ -433,6 +463,13 @@ bool engine::is_done(request_base *req) {
   if (req->is_done()) return true;
   _rank_engines[req->rank_id]->process();
   return req->is_done();
+}
+
+void engine::update_gc_lsn(uint64_t gc_lsn) {
+  assert(_enable_gc);
+  for (auto &re: _rank_engines) {
+    *(volatile uint64_t*)&re->_recent_gc_lsn = gc_lsn;
+  }
 }
 
 void engine::print_log(int pim_id) {

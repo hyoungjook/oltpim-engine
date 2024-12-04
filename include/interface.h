@@ -20,6 +20,9 @@ typedef struct _index_info {
 } index_info;
 static_assert((sizeof(index_info) * DPU_MAX_NUM_INDEXES) % 8 == 0, "");
 
+// Global configuration
+#define DPU_ENABLE_GC_SYMBOL global_enable_gc_
+
 /**
  * Status codes
  */
@@ -114,6 +117,11 @@ _(6, abort, 0,                      \
   , 8,                              \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
+_(7, gc, 0,                         \
+    uint64_t gc_lsn;                \
+  , 8,                              \
+    uint64_t pad;                   \
+  , 8, -8, __VA_ARGS__)             \
 
 #define NUM_PRIORITIES 2
 #define REQUEST_MAX_ARGS_SIZE 40
@@ -153,7 +161,7 @@ typedef enum _request_type_t {
   request_type_##name = type_id,
 REQUEST_TYPES_LIST(ENUM_MEMBERS)
 #undef ENUM_MEMBERS
-request_type_priority_separator = 0xFF,
+  request_type_priority_separator = 0xFF,
 } request_type_t;
 
 typedef union _args_any_t {

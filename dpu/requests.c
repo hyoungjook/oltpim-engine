@@ -7,6 +7,7 @@
 #include "object.h"
 #include "wset.h"
 #include "global.h"
+#include "gc.h"
 
 #define NUM_INDEXES DPU_NUM_INDEXES_SYMBOL
 #define INDEX_INFOS DPU_INDEX_INFOS_SYMBOL
@@ -24,6 +25,7 @@ void process_init_global() {
   }
   object_init_global();
   wset_init_global();
+  gc_init_global();
 }
 
 #define DECLARE_REQUEST_FUNC(_1, name, _2, _3, _4, _5, _6, ...) \
@@ -208,4 +210,8 @@ static inline void process_abort(args_abort_t *args, __mram_ptr uint8_t *_) {
   // csn not used
   arg.commit = false;
   wset_traverse_remove(args->xid, finalize_callback, &arg);
+}
+
+static inline void process_gc(args_gc_t *args, __mram_ptr uint8_t *_) {
+  gc_update_lsn(args->gc_lsn);
 }

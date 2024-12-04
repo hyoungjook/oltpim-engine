@@ -24,4 +24,7 @@ struct request_scan {
   using t = request<request_type_scan, args_scan_t, rets_scan_ext<rn>>;
 };
 
+// args_gc_t should match the code in engine.cpp:rank_buffer::push_gc_lsn()
+static_assert(sizeof(args_gc_t) == sizeof(uint64_t), "");
+
 }

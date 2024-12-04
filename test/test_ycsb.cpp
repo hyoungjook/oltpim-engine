@@ -140,7 +140,8 @@ int main(int argc, char *argv[]) {
   engine.add_index(index_info{.primary = true});
   engine.init(oltpim::engine::config{
     .num_ranks_per_numa_node = num_ranks_per_numa_node,
-    .alloc_fn = nullptr
+    .alloc_fn = nullptr,
+    .enable_gc = false
   });
 
   // Required to pin host threads to cores
