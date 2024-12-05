@@ -12,7 +12,7 @@ set(COMMON_CFLAGS -Wall -Werror)
 # DPU codes: only *.c
 set(DPU_BINARY oltpim_dpu)
 ### Larger NR_TASKLETS accelerates PIM program but increases mux switch latency
-set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=2)
+set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=4)
 #set(DPU_CFLAGS ${COMMON_CFLAGS} -DNR_TASKLETS=2 -pg) # if using dpu-profiling
 set(DPU_CFLAGS_DEBUG -O3 -g3) # -O3 required to fit in IRAM
 set(DPU_CFLAGS_RELEASE -O3 -DNDEBUG)
