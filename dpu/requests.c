@@ -110,11 +110,36 @@ static inline void process_get(args_get_t *args, __mram_ptr uint8_t *mrets) {
 }
 
 static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets) {
+  // update without returning old_value. the rest is the same with updatermw.
   const uint8_t index_id = args->xid_s.index_id;
   const uint64_t xid = args->xid_s.xid;
   assert_print(index_id < NUM_INDEXES);
   assert_print(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_update_t rets;
+  status_t status = STATUS_FAILED;
+  bool add_to_write_set = false;
+  // query btree
+  oid_t oid = btree_get(index_trees[index_id], args->key);
+  if (oid != BTREE_NOVAL) {
+    status = object_update(oid, xid, args->csn, args->new_value,
+      NULL, false, &add_to_write_set);
+  }
+  if (status == STATUS_SUCCESS && add_to_write_set) {
+    wset_add(xid, oid);
+  }
+  // return
+  rets.oid = oid;
+  rets.status = status;
+  mram_write(&rets, mrets, sizeof(rets_update_t));
+}
+
+static inline void process_updatermw(args_updatermw_t *args, __mram_ptr uint8_t *mrets) {
+  // update with returning old_value. the rest is the same with update.
+  const uint8_t index_id = args->xid_s.index_id;
+  const uint64_t xid = args->xid_s.xid;
+  assert_print(index_id < NUM_INDEXES);
+  assert_print(INDEX_INFOS[index_id].primary);
+  __dma_aligned rets_updatermw_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
@@ -129,7 +154,7 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   // return
   rets.oid = oid;
   rets.status = status;
-  mram_write(&rets, mrets, sizeof(rets_update_t));
+  mram_write(&rets, mrets, sizeof(rets_updatermw_t));
 }
 
 static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets) {

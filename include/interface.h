@@ -88,11 +88,23 @@ _(2, update, 1,                     \
     } xid_s;                        \
     uint64_t csn;                   \
   , 32,                             \
+    uint32_t oid;                   \
+    uint8_t status;                 \
+  , 8, 0, __VA_ARGS__)             \
+_(3, updatermw, 1,                  \
+    uint64_t key;                   \
+    uint64_t new_value;             \
+    struct {                        \
+      uint64_t xid: 56;             \
+      uint8_t index_id;             \
+    } xid_s;                        \
+    uint64_t csn;                   \
+  , 32,                             \
     uint64_t old_value;             \
     uint32_t oid;                   \
     uint8_t status;                 \
   , 16, 0, __VA_ARGS__)             \
-_(3, remove, 1,                     \
+_(4, remove, 1,                     \
     uint64_t key;                   \
     struct {                        \
       uint64_t xid: 56;             \
@@ -104,7 +116,7 @@ _(3, remove, 1,                     \
     uint8_t status;                 \
     uint8_t pad[3];                 \
   , 8, 0, __VA_ARGS__)              \
-_(4, scan, 1,                       \
+_(5, scan, 1,                       \
     uint8_t max_outs;               \
     uint8_t index_id;               \
     uint8_t pad[6];                 \
@@ -117,18 +129,18 @@ _(4, scan, 1,                       \
     uint8_t pad[6];                 \
     uint64_t values[0];             \
   , 8, 8 * (__rn), __VA_ARGS__)     \
-_(5, commit, 0,                     \
+_(6, commit, 0,                     \
     uint64_t xid;                   \
     uint64_t csn;                   \
   , 16,                             \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(6, abort, 0,                      \
+_(7, abort, 0,                      \
     uint64_t xid;                   \
   , 8,                              \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(7, gc, 0,                         \
+_(8, gc, 0,                         \
     uint64_t gc_lsn;                \
   , 8,                              \
     uint64_t pad;                   \
