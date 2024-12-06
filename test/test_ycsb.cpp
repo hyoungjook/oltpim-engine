@@ -208,9 +208,9 @@ int main(int argc, char *argv[]) {
           const uint64_t key = key_base + k;
           arg.key = key;
           arg.value = key + 7;
-          arg.xid = xid;
+          arg.xid_s.xid = xid;
+          arg.xid_s.index_id = 0;
           arg.csn = begin_csn;
-          arg.index_id = 0;
           int pim_id = key_to_pim(key);
           touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[k]);
@@ -263,10 +263,10 @@ int main(int argc, char *argv[]) {
           auto &arg = reqs[k].args;
           const uint64_t key = key_base + k;
           arg.key = key;
-          arg.xid = xid;
+          arg.xid_s.xid = xid;
+          arg.xid_s.index_id = 0;
+          arg.xid_s.oid_query = 0;
           arg.csn = begin_csn;
-          arg.index_id = 0;
-          arg.oid_query = 0;
           int pim_id = key_to_pim(key);
           touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[k]);
@@ -278,8 +278,8 @@ int main(int argc, char *argv[]) {
         }
 
         for (uint64_t k = 0; k < num_keys; ++k) {
-          assert(reqs[k].rets.status == STATUS_SUCCESS);
-          assert(reqs[k].rets.value == reqs[k].args.key + 7);
+          assert(REQ_GET_STATUS(reqs[k].rets.value_status) == STATUS_SUCCESS);
+          assert(reqs[k].rets.value_status == reqs[k].args.key + 7);
         }
       }
 
@@ -378,10 +378,10 @@ int main(int argc, char *argv[]) {
           uint64_t key = rand_key_distr(rg);
           auto &arg = reqs[i].args;
           arg.key = key;
-          arg.xid = xid;
+          arg.xid_s.xid = xid;
+          arg.xid_s.index_id = 0;
+          arg.xid_s.oid_query = 0;
           arg.csn = begin_csn;
-          arg.index_id = 0;
-          arg.oid_query = 0;
           int pim_id = key_to_pim(key);
           touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[i]);
@@ -394,22 +394,23 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < tests_per_txn; ++i) {
           uint64_t key = reqs[i].args.key;
           auto &ret = reqs[i].rets;
+          auto ret_status = REQ_GET_STATUS(ret.value_status);
 
           // check
           if (key <= (uint64_t)table_size) {
-            assert(ret.status != STATUS_FAILED);
-            if (ret.status == STATUS_SUCCESS) {
-              assert(ret.value == key + 7 || ret.value == key + 77);
+            assert(ret_status != STATUS_FAILED);
+            if (ret_status == STATUS_SUCCESS) {
+              assert(ret.value_status == key + 7 || ret.value_status == key + 77);
             }
           }
           else {
-            assert(ret.status != STATUS_SUCCESS);
+            assert(ret_status != STATUS_SUCCESS);
           }
           // status
-          if (ret.status == STATUS_FAILED) {
+          if (ret_status == STATUS_FAILED) {
             status = STATUS_FAILED;
           }
-          else if (ret.status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
+          else if (ret_status == STATUS_CONFLICT && status == STATUS_SUCCESS) {
             status = STATUS_CONFLICT;
           }
         }
@@ -420,10 +421,10 @@ int main(int argc, char *argv[]) {
           uint64_t key = rand_key_distr(rg);
           auto &arg = reqs[i].args;
           arg.key = key;
-          arg.xid = xid;
+          arg.xid_s.xid = xid;
+          arg.xid_s.index_id = 0;
           arg.csn = begin_csn;
           arg.new_value = key + 77;
-          arg.index_id = 0;
           int pim_id = key_to_pim(key);
           touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[i]);

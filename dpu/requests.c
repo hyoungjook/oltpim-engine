@@ -45,23 +45,25 @@ void process_request(request_type_t request_type, args_any_t *args, __mram_ptr u
 static_assert(sizeof(btree_val_t) == sizeof(oid_t), "");
 
 static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets) {
-  assert_print(args->index_id < NUM_INDEXES);
+  const uint8_t index_id = args->xid_s.index_id;
+  const uint64_t xid = args->xid_s.xid;
+  assert_print(index_id < NUM_INDEXES);
   __dma_aligned rets_insert_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = true; // default, if btree_insert succeeds
   // Allocate object
-  oid_t oid = object_create_acquire(args->xid, args->value,
-    INDEX_INFOS[args->index_id].primary);
+  oid_t oid = object_create_acquire(xid, args->value,
+    INDEX_INFOS[index_id].primary);
   // Try insert to btree
-  btree_val_t old_oid = btree_insert(index_trees[args->index_id], args->key, oid);
+  btree_val_t old_oid = btree_insert(index_trees[index_id], args->key, oid);
   if (old_oid != BTREE_NOVAL) {
     // key already exists
-    assert_print(INDEX_INFOS[args->index_id].primary);
+    assert_print(INDEX_INFOS[index_id].primary);
     object_cancel_create(oid);
     oid = old_oid;
-    if (!object_read(oid, args->xid, args->csn, NULL)) {
+    if (!object_read(oid, xid, args->csn, NULL)) {
       // already deleted version, try insert as an update
-      status = object_update(oid, args->xid, args->csn, args->value,
+      status = object_update(oid, xid, args->csn, args->value,
         NULL, false, &add_to_write_set);
     }
     else {
@@ -74,7 +76,7 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
     status = STATUS_SUCCESS;
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
-    wset_add(args->xid, oid);
+    wset_add(xid, oid);
   }
   // return
   rets.oid = oid;
@@ -83,41 +85,46 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
 }
 
 static inline void process_get(args_get_t *args, __mram_ptr uint8_t *mrets) {
-  assert_print(args->index_id < NUM_INDEXES);
+  const uint8_t index_id = args->xid_s.index_id;
+  assert_print(index_id < NUM_INDEXES);
   __dma_aligned rets_get_t rets;
   status_t status = STATUS_FAILED;
   // query btree
   oid_t oid;
-  if (args->oid_query) {
-    assert_print(INDEX_INFOS[args->index_id].primary);
+  if (args->xid_s.oid_query) {
+    assert_print(INDEX_INFOS[index_id].primary);
     oid = (oid_t)args->key;
   }
   else {
-    oid = btree_get(index_trees[args->index_id], args->key);
+    oid = btree_get(index_trees[index_id], args->key);
   }
-
-  if (oid != BTREE_NOVAL && object_read(oid, args->xid, args->csn, &rets.value)) {
+  // get value
+  if (oid != BTREE_NOVAL && object_read(oid, args->xid_s.xid, args->csn, &rets.value_status)) {
     status = STATUS_SUCCESS;
   }
-  // return
-  rets.status = status;
+  // check status
+  if (status != STATUS_SUCCESS) {
+    rets.value_status = ((uint64_t)-status);
+  }
   mram_write(&rets, mrets, sizeof(rets_get_t));
 }
 
 static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets) {
-  assert_print(args->index_id < NUM_INDEXES);
-  assert_print(INDEX_INFOS[args->index_id].primary);
+  const uint8_t index_id = args->xid_s.index_id;
+  const uint64_t xid = args->xid_s.xid;
+  assert_print(index_id < NUM_INDEXES);
+  assert_print(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_update_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
-  oid_t oid = btree_get(index_trees[args->index_id], args->key);
+  oid_t oid = btree_get(index_trees[index_id], args->key);
   if (oid != BTREE_NOVAL) {
-    status = object_update(oid, args->xid, args->csn, args->new_value,
+    status = object_update(oid, xid, args->csn, args->new_value,
       &rets.old_value, false, &add_to_write_set);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
-    wset_add(args->xid, oid);
+    wset_add(xid, oid);
   }
   // return
   rets.oid = oid;
@@ -126,18 +133,20 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
 }
 
 static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets) {
-  assert_print(args->index_id < NUM_INDEXES);
-  assert_print(INDEX_INFOS[args->index_id].primary);
+  const uint8_t index_id = args->xid_s.index_id;
+  const uint64_t xid = args->xid_s.xid;
+  assert_print(index_id < NUM_INDEXES);
+  assert_print(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_remove_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
-  oid_t oid = btree_get(index_trees[args->index_id], args->key);
+  oid_t oid = btree_get(index_trees[index_id], args->key);
   if (oid != BTREE_NOVAL) {
-    status = object_update(oid, args->xid, args->csn, 0, NULL, true, &add_to_write_set);
+    status = object_update(oid, xid, args->csn, 0, NULL, true, &add_to_write_set);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
-    wset_add(args->xid, oid);
+    wset_add(xid, oid);
   }
   // return
   rets.oid = oid;

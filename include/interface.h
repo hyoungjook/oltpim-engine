@@ -34,6 +34,10 @@ typedef uint8_t status_t;
   assert(((status) >= STATUS_SUCCESS) || \
          ((status) <= STATUS_CONFLICT))
 
+#define REQ_GET_STATUS(value_status) \
+  (((value_status) >= (uint64_t)(-3)) ? \
+  -(value_status) : STATUS_SUCCESS)
+
 /**
  * Request Type Specification
  * @param type_id id of request type, should be 0, 1, ...
@@ -54,41 +58,48 @@ typedef uint8_t status_t;
 _(0, insert, 0,                     \
     uint64_t key;                   \
     uint64_t value;                 \
-    uint64_t xid;                   \
+    struct {                        \
+      uint64_t xid: 56;             \
+      uint8_t index_id;             \
+    } xid_s;                        \
     uint64_t csn;                   \
-    uint8_t index_id;               \
-  , 40,                             \
+  , 32,                             \
     uint32_t oid;                   \
     uint8_t status;                 \
     uint8_t pad[3];                 \
   , 8, 0, __VA_ARGS__)              \
 _(1, get, 1,                        \
     uint64_t key;                   \
-    uint64_t xid;                   \
+    struct {                        \
+      uint64_t xid: 56;             \
+      uint8_t index_id: 7;          \
+      uint8_t oid_query: 1;         \
+    } xid_s;                        \
     uint64_t csn;                   \
-    uint8_t index_id;               \
-    uint8_t oid_query;              \
-  , 32,                             \
-    uint64_t value;                 \
-    uint8_t status;                 \
-  , 16, 0, __VA_ARGS__)             \
+  , 24,                             \
+    uint64_t value_status;          \
+  , 8, 0, __VA_ARGS__)              \
 _(2, update, 1,                     \
     uint64_t key;                   \
     uint64_t new_value;             \
-    uint64_t xid;                   \
+    struct {                        \
+      uint64_t xid: 56;             \
+      uint8_t index_id;             \
+    } xid_s;                        \
     uint64_t csn;                   \
-    uint8_t index_id;               \
-  , 40,                             \
+  , 32,                             \
     uint64_t old_value;             \
     uint32_t oid;                   \
     uint8_t status;                 \
   , 16, 0, __VA_ARGS__)             \
 _(3, remove, 1,                     \
     uint64_t key;                   \
-    uint64_t xid;                   \
+    struct {                        \
+      uint64_t xid: 56;             \
+      uint8_t index_id;             \
+    } xid_s;                        \
     uint64_t csn;                   \
-    uint8_t index_id;               \
-  , 32,                             \
+  , 24,                             \
     uint32_t oid;                   \
     uint8_t status;                 \
     uint8_t pad[3];                 \
