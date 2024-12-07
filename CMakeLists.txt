@@ -38,6 +38,14 @@ add_custom_target(build_dpu_binary ALL DEPENDS ${DPU_BINARY})
 file(REAL_PATH ${DPU_BINARY} DPU_BINARY_PATH BASE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 # Host codes: only *.cpp
+include_directories(
+  upmem-sdk-runtime/commons/include
+  upmem-sdk-runtime/commons/src/properties
+  upmem-sdk-runtime/hw/src/commons
+  upmem-sdk-runtime/hw/src/rank
+  upmem-sdk-runtime/ufi/include/ufi
+  upmem-sdk-runtime/verbose/src
+)
 set(HOST_LIB oltpim)
 execute_process(COMMAND dpu-pkg-config --cflags dpu
   OUTPUT_VARIABLE CFLAGS_DPU_CONFIG

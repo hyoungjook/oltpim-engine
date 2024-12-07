@@ -1,0 +1,3 @@
+[submodule "upmem-sdk-runtime"]
+	path = upmem-sdk-runtime
+	url = https://github.com/hyoungjook/upmem-sdk-runtime.git

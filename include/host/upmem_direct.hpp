@@ -10,6 +10,7 @@
 #define UPMEM_USE_DIRECT_MUX
 
 extern "C" {
+/* Includes from UPMEM Host APIs and Low-Level APIs */
 #include <dpu.h>
 #include <dpu_description.h>
 #include <dpu_hw_description.h>
@@ -18,31 +19,20 @@ extern "C" {
 #include <dpu_runner.h>
 #include <dpu_target.h>
 
-/**
- * Non-exposed internal structs, specific to sdk 2024.2.0
- * The purpose is to extract ptr_region from the rank
- */
-struct dpu_rank_udev {
-    struct udev *udev;
-    struct udev_device *dev;
-    struct udev_enumerate *enumerate;
-    struct udev_list_entry *devices;
-};
+/* Includes from UPMEM-SDK submodule */
+#include "dpu_rank.h"
+#include "ufi.h"
+#include "ufi_config.h"
 
-struct dpu_rank_fs {
-    char rank_path[128];
-    int fd_rank;
-    int fd_dax;
-    struct dpu_rank_udev udev, udev_dax, udev_parent;
-};
-
+// hw/src/rank/hw_dpu_rank.c
+// hw/src/commons/dpu_region_address_translation.h
+#include "hw_dpu_sysfs.h"
 struct dpu_transfer_thread_configuration {
     uint32_t nb_thread_per_pool;
     uint32_t threshold_1_thread;
     uint32_t threshold_2_threads;
     uint32_t threshold_4_threads;
 };
-
 struct dpu_region_address_translation {
     struct dpu_hw_description_t *desc;
     uint8_t backend_id;
@@ -51,82 +41,36 @@ struct dpu_region_address_translation {
     struct dpu_transfer_thread_configuration xfer_thread_conf;
     bool one_read;
     void *private_;
-    void *init_rank;
+    int *init_rank;
     void *destroy_rank;
     void *write_to_rank;
     void *read_from_rank;
     void *write_to_cis;
     void *read_from_cis;
+#ifdef __KERNEL__
+    int *mmap_hybrid;
+#endif
 };
-
+typedef struct _fpga_allocation_parameters_t {
+  bool activate_ila;
+  bool activate_filtering_ila;
+  bool activate_mram_bypass;
+  bool activate_mram_refresh_emulation;
+  unsigned int mram_refresh_emulation_period;
+  char *report_path;
+  bool cycle_accurate;
+} fpga_allocation_parameters_t;
 typedef struct _hw_dpu_rank_allocation_parameters_t {
-    struct dpu_rank_fs rank_fs;
-    struct dpu_region_address_translation translate;
-    uint64_t region_size;
-    uint8_t mode, dpu_chip_id, backend_id;
-    uint8_t channel_id;
-    uint8_t *ptr_region;
-    bool bypass_module_compatibility;
-} *hw_dpu_rank_allocation_parameters_t;
-
-typedef uint32_t dpu_selected_mask_t;
-
-struct dpu_configuration_slice_info_t {
-    uint64_t byte_order;
-    uint64_t structure_value; // structure register is overwritten by debuggers, we need a place where debugger
-    // can access the last structure so that it replays the last write_structure command.
-    struct dpu_slice_target slice_target;
-
-    dpu_bitfield_t host_mux_mram_state; // Contains the state of all the MRAM muxes
-
-    dpu_selected_mask_t dpus_per_group[DPU_MAX_NR_GROUPS];
-
-    dpu_selected_mask_t enabled_dpus;
-    bool all_dpus_are_enabled;
-};
-
-#define ALL_CIS ((1u << DPU_MAX_NR_CIS) - 1u)
-#define CI_MASK_ON(mask, ci) (((mask) & (1u << (ci))) != 0)
-
-struct dpu_control_interface_context {
-    dpu_ci_bitfield_t fault_decode;
-    dpu_ci_bitfield_t fault_collide;
-
-    dpu_ci_bitfield_t color;
-    struct dpu_configuration_slice_info_t slice_info[DPU_MAX_NR_CIS]; // Used for the current application to hold slice info
-};
-
-struct dpu_runtime_state_t {
-    struct dpu_control_interface_context control_interface;
-    struct _dpu_run_context_t run_context;
-};
-
-struct dpu_rank_t {
-    dpu_type_t type;
-    dpu_rank_id_t rank_id;
-    dpu_rank_id_t rank_handler_allocator_id;
-    dpu_description_t description;
-    uint32_t dpu_offset;
-    struct dpu_runtime_state_t runtime;
-};
-
-/**
- * These are declared with __API_SYMBOL__ but not declared in header
- */
-dpu_error_t dpu_switch_mux_for_rank(struct dpu_rank_t *rank, bool set_mux_for_host);
-
-typedef uint8_t u8;
-typedef uint32_t u32;
-u32 ufi_select_all(dpu_rank_t *rank, u8 *ci_mask);
-u32 ufi_select_all_even_disabled(dpu_rank_t *rank, u8 *ci_mask);
-u32 ufi_set_mram_mux(dpu_rank_t *rank, u8 ci_mask, dpu_ci_bitfield_t ci_mux_pos);
-u32 ufi_write_dma_ctrl(dpu_rank_t *rank, u8 ci_mask, u8 address, u8 data);
-u32 ufi_read_dma_ctrl(dpu_rank_t *rank, u8 ci_mask, u8 *data);
-u32 ufi_clear_dma_ctrl(dpu_rank_t *rank, u8 ci_mask);
-u32 ufi_thread_boot(dpu_rank_t *rank, u8 ci_mask, u8 thread, u8 *previous);
-u32 ufi_read_dpu_run(dpu_rank_t *rank, u8 ci_mask, u8 *run);
-u32 ufi_read_dpu_fault(dpu_rank_t *rank, u8 ci_mask, u8 *fault);
-
+  struct dpu_rank_fs rank_fs;
+  struct dpu_region_address_translation translate;
+  uint64_t region_size;
+  uint8_t mode, dpu_chip_id, backend_id;
+  uint8_t channel_id;
+  uint8_t *ptr_region;
+  bool bypass_module_compatibility;
+  /* Backends specific */
+  fpga_allocation_parameters_t fpga;
+} * hw_dpu_rank_allocation_parameters_t;
 }
 
 namespace upmem {
