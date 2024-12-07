@@ -115,11 +115,17 @@ struct dpu_rank_t {
  */
 dpu_error_t dpu_switch_mux_for_rank(struct dpu_rank_t *rank, bool set_mux_for_host);
 
-uint32_t ufi_select_all_even_disabled(struct dpu_rank_t *rank, uint8_t *ci_mask);
-uint32_t ufi_set_mram_mux(struct dpu_rank_t *rank, uint8_t ci_mask, dpu_ci_bitfield_t ci_mux_pos);
-uint32_t ufi_write_dma_ctrl(struct dpu_rank_t *rank, uint8_t ci_mask, uint8_t address, uint8_t data);
-uint32_t ufi_read_dma_ctrl(struct dpu_rank_t *rank, uint8_t ci_mask, uint8_t *data);
-uint32_t ufi_clear_dma_ctrl(struct dpu_rank_t *rank, uint8_t ci_mask);
+typedef uint8_t u8;
+typedef uint32_t u32;
+u32 ufi_select_all(dpu_rank_t *rank, u8 *ci_mask);
+u32 ufi_select_all_even_disabled(dpu_rank_t *rank, u8 *ci_mask);
+u32 ufi_set_mram_mux(dpu_rank_t *rank, u8 ci_mask, dpu_ci_bitfield_t ci_mux_pos);
+u32 ufi_write_dma_ctrl(dpu_rank_t *rank, u8 ci_mask, u8 address, u8 data);
+u32 ufi_read_dma_ctrl(dpu_rank_t *rank, u8 ci_mask, u8 *data);
+u32 ufi_clear_dma_ctrl(dpu_rank_t *rank, u8 ci_mask);
+u32 ufi_thread_boot(dpu_rank_t *rank, u8 ci_mask, u8 thread, u8 *previous);
+u32 ufi_read_dpu_run(dpu_rank_t *rank, u8 ci_mask, u8 *run);
+u32 ufi_read_dpu_fault(dpu_rank_t *rank, u8 ci_mask, u8 *fault);
 
 }
 
@@ -201,6 +207,37 @@ public:
 #else
     DPU_ASSERT(dpu_switch_mux_for_rank(rank, mux_for_host));
 #endif
+  }
+};
+
+class direct_launch {
+public:
+  static void boot(dpu_rank_t *rank) {
+    mux::switch_rank(rank, false);
+    // DPU_ASSERT(dpu_boot_rank(rank));
+    uint8_t ci_mask = ALL_CIS;
+    DPU_ASSERT((dpu_error_t)ufi_select_all(rank, &ci_mask));
+    DPU_ASSERT((dpu_error_t)ufi_thread_boot(rank, ci_mask, DPU_BOOT_THREAD, NULL));
+  }
+
+  static void poll_status(dpu_rank_t *rank, bool *done, bool *fault) {
+    //DPU_ASSERT(dpu_poll_rank(rank));
+    //DPU_ASSERT(dpu_status_rank(rank, done, fault));
+    uint8_t ci_mask = ALL_CIS;
+    dpu_bitfield_t poll_running[DPU_MAX_NR_CIS], poll_fault[DPU_MAX_NR_CIS];
+    DPU_ASSERT((dpu_error_t)ufi_select_all(rank, &ci_mask));
+    DPU_ASSERT((dpu_error_t)ufi_read_dpu_run(rank, ci_mask, poll_running));
+    DPU_ASSERT((dpu_error_t)ufi_read_dpu_fault(rank, ci_mask, poll_fault));
+    const uint8_t nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
+    *done = true;
+    *fault = false;
+    for (uint8_t each_ci = 0; each_ci < nr_cis; ++each_ci) {
+      dpu_selected_mask_t mask_all = rank->runtime.control_interface.slice_info[each_ci].enabled_dpus;
+      dpu_bitfield_t ci_fault = poll_fault[each_ci] & mask_all;
+      dpu_bitfield_t ci_running = (poll_running[each_ci] & mask_all) & (~ci_fault);
+      *done = *done && (ci_running == 0);
+      *fault = *fault || (ci_fault != 0);
+    }
   }
 };
 

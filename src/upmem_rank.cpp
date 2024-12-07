@@ -95,9 +95,7 @@ void rank::load(const char *binary_path) {
 }
 
 bool rank::launch(bool async) {
-  // switch mux in advance to skip expensive default mux switch
-  mux::switch_rank(_rank, false);
-  DPU_ASSERT(dpu_boot_rank(_rank));
+  direct_launch::boot(_rank);
   if (!async) {
     bool fault = false;
     while (true) {
@@ -110,8 +108,7 @@ bool rank::launch(bool async) {
 
 bool rank::is_done(bool *fault) {
   bool _done, _fault;
-  DPU_ASSERT(dpu_poll_rank(_rank));
-  DPU_ASSERT(dpu_status_rank(_rank, &_done, &_fault));
+  direct_launch::poll_status(_rank, &_done, &_fault);
   if (fault) *fault = _fault;
   return _done;
 }
