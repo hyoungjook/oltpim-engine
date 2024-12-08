@@ -8,6 +8,7 @@
 #include <iostream>
 
 #define UPMEM_USE_DIRECT_MUX
+#define UPMEM_USE_DIRECT_LAUNCH
 
 extern "C" {
 /* Includes from UPMEM Host APIs and Low-Level APIs */
@@ -22,6 +23,8 @@ extern "C" {
 /* Includes from UPMEM-SDK submodule */
 #include "dpu_rank.h"
 #include "ufi.h"
+#include "ufi_ci.h"
+#include "ufi_ci_commands.h"
 #include "ufi_config.h"
 
 // hw/src/rank/hw_dpu_rank.c
@@ -73,7 +76,255 @@ typedef struct _hw_dpu_rank_allocation_parameters_t {
 } * hw_dpu_rank_allocation_parameters_t;
 }
 
+#define UPMEM_DIRECT_ASSERT(expr) (likely((expr) == (u32)DPU_OK) ? (void)0 : abort())
+
 namespace upmem {
+
+namespace ufi {
+/**
+ * The optimized ufi API, modified from ufi.c and ufi_ci.c
+ */
+namespace ci {
+static inline void compute_masks(struct dpu_rank_t *rank, const u64 *commands,
+		u64 *masks, u64 *expected, u8 *cis, bool *is_done) {
+	u8 ci_mask = 0;
+	u8 nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
+	for (u8 each_ci = 0; each_ci < nr_cis; ++each_ci) {
+		if (commands[each_ci] != CI_EMPTY) {
+			ci_mask |= (1 << each_ci);
+			masks[each_ci] |= 0xFF0000FF00000000l;
+			expected[each_ci] |= 0x000000FF00000000l;
+		} else
+			is_done[each_ci] = true;
+	}
+	*cis = ci_mask;
+}
+
+static inline bool determine_if_commands_are_finished(struct dpu_rank_t *rank,
+    const u64 *data, const u64 *expected, const u64 *result_masks,
+    u8 expected_color, bool *is_done) {
+	struct dpu_control_interface_context *context = &rank->runtime.control_interface;
+	u8 nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
+	u8 each_ci;
+	u8 color, nb_bits_set, ci_mask, ci_color;
+
+	for (each_ci = 0; each_ci < nr_cis; ++each_ci) {
+		if (!is_done[each_ci]) {
+			u64 result = data[each_ci];
+
+			/* The second case can happen when the debugger has restored the result */
+			if ((result & result_masks[each_ci]) !=
+				    expected[each_ci] &&
+			    (result & CI_NOP) != CI_NOP) {
+				return false;
+			}
+
+			/* From here, the result seems ok, we just need to check that the color is ok. */
+			color = ((result & 0x00FF000000000000ULL) >> 48) & 0xFF;
+			nb_bits_set = __builtin_popcount(color);
+			ci_mask = 1 << each_ci;
+			ci_color = expected_color & ci_mask;
+
+			if (ci_color != 0) {
+				if (nb_bits_set <= 3) {
+					return false;
+				}
+			} else {
+				if (nb_bits_set >= 5) {
+					return false;
+				}
+			}
+
+			is_done[each_ci] = true;
+
+			/* We are in fault path, store this information */
+			if (ci_color != 0) {
+				nb_bits_set = 8 - nb_bits_set;
+			}
+
+			switch (nb_bits_set) {
+			case 0:
+				break;
+			case 1:
+				context->fault_decode |= ci_mask;
+				break;
+			case 2:
+				context->fault_collide |= ci_mask;
+				break;
+			case 3:
+				context->fault_collide |= ci_mask;
+				context->fault_decode |= ci_mask;
+				break;
+			default:
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+static void exec_cmd(struct dpu_rank_t *rank, u64 *commands)
+{
+	u8 expected_color;
+	u64 result_masks[DPU_MAX_NR_CIS] = { 0 };
+	u64 expected[DPU_MAX_NR_CIS] = { 0 };
+	u64 *data = rank->data;
+	bool is_done[DPU_MAX_NR_CIS] = { 0 };
+	u8 ci_mask;
+	bool in_progress, timeout;
+	u32 nr_retries;
+	u32 nr_retry_commit_cmd = 2;
+
+	compute_masks(rank, commands, result_masks, expected, &ci_mask, is_done);
+	expected_color = rank->runtime.control_interface.color & ci_mask;
+  rank->runtime.control_interface.color ^= ci_mask;
+
+	// TMP workaround: sometimes we have a CI timeout so we just need to resend the commands (see Jira SW-309)
+	// The commands are well sent to the CI but sometimes acknowledgment seems to be not done
+	// We can expect to have the issue by loading program to IRAM in loop for an hour
+send_cmd:
+	nr_retries = 100;
+  UPMEM_DIRECT_ASSERT(ci_commit_commands(rank, commands));
+	do {
+    UPMEM_DIRECT_ASSERT(ci_update_commands(rank, data));
+		in_progress = !determine_if_commands_are_finished(
+			rank, data, expected, result_masks, expected_color,
+			is_done);
+
+		timeout = (nr_retries--) == 0;
+
+		if (timeout && nr_retry_commit_cmd > 0) {
+			nr_retry_commit_cmd--;
+			goto send_cmd;
+		}
+	} while (in_progress && !timeout);
+	if (in_progress) {
+    UPMEM_DIRECT_ASSERT(DPU_ERR_TIMEOUT);
+	}
+	if (1) {
+		/* All results are ready here, and still present when reading the control interfaces.
+		 * We make sure that we have the correct results by reading again (we may have timing issues).
+		 * todo(#85): this can be somewhat costly. We should try to integrate this additional read in a lower layer.
+		 */
+    UPMEM_DIRECT_ASSERT(ci_update_commands(rank, data));
+	}
+}
+
+static inline void prepare_mask(u64 *buffer, u8 mask, u64 data) {
+  for (u8 each_ci = 0; each_ci < DPU_MAX_NR_CIS; ++each_ci) {
+    if (CI_MASK_ON(mask, each_ci)) {
+			buffer[each_ci] = data;
+		} else {
+			buffer[each_ci] = CI_EMPTY;
+		}
+  }
+}
+
+static inline void exec_void_cmd(dpu_rank_t *rank, u64 *commands) {
+  ufi::ci::exec_cmd(rank, commands);
+}
+
+static inline void exec_8bit_cmd(dpu_rank_t *rank, u64 *commands, u8 *results) {
+  ufi::ci::exec_cmd(rank, commands);
+  const u8 nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
+  for (u8 each_ci = 0; each_ci < nr_cis; ++each_ci) {
+    if (commands[each_ci] != CI_EMPTY) {
+      results[each_ci] = rank->data[each_ci];
+    }
+  }
+}
+} // namespace ci
+
+static inline void exec_write_structure(dpu_rank_t *rank, u8 ci_mask, u64 structure) {
+  const u8 nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
+  bool do_write_structure = false;
+  for (u8 each_ci = 0; each_ci < nr_cis; ++each_ci) {
+    if (rank->runtime.control_interface.slice_info[each_ci].structure_value != structure) {
+      rank->runtime.control_interface.slice_info[each_ci].structure_value = structure;
+      do_write_structure = true;
+    }
+  }
+  if (do_write_structure) {
+    u64 *cmds = rank->cmds;
+    ufi::ci::prepare_mask(cmds, ci_mask, structure);
+    ufi::ci::exec_void_cmd(rank, cmds);
+  }
+}
+
+static inline void exec_void_frame(dpu_rank_t *rank, u8 ci_mask, u64 structure, u64 frame) {
+  u64 *cmds = rank->cmds;
+  ufi::exec_write_structure(rank, ci_mask, structure);
+  ufi::ci::prepare_mask(cmds, ci_mask, frame);
+  ufi::ci::exec_void_cmd(rank, cmds);
+}
+
+static inline void exec_8bit_frame(dpu_rank_t *rank, u8 ci_mask, u64 structure, u64 frame, u8 *results) {
+  u64 *cmds = rank->cmds;
+  ufi::exec_write_structure(rank, ci_mask, structure);
+  ufi::ci::prepare_mask(cmds, ci_mask, frame);
+  ufi::ci::exec_8bit_cmd(rank, cmds, results);
+}
+
+static inline u64 ci_dma_ctrl_write_frame(u8 address, u8 data)
+{
+	u8 b0 = 0x60 | (((address) >> 4) & 0x0F);
+	u8 b1 = 0x60 | (((address) >> 0) & 0x0F);
+	u8 b2 = 0x60 | (((data) >> 4) & 0x0F);
+	u8 b3 = 0x60 | (((data) >> 0) & 0x0F);
+	u8 b4 = 0x60;
+	u8 b5 = 0x20;
+
+	return CI_DMA_CTRL_WRITE_FRAME(b0, b1, b2, b3, b4, b5);
+}
+
+static inline void write_dma_ctrl(dpu_rank_t *rank, u8 ci_mask, u8 address, u8 data) {
+  ufi::exec_void_frame(
+  rank, ci_mask, CI_DMA_CTRL_WRITE_STRUCT,
+  ci_dma_ctrl_write_frame(address, data));
+}
+
+static inline void write_dma_ctrl_datas(dpu_rank_t *rank, u8 ci_mask, u8 address, u8 *datas) {
+  const u8 nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
+  ufi::exec_write_structure(rank, ci_mask, CI_DMA_CTRL_WRITE_STRUCT);
+  u64 *frames = rank->cmds;
+  for (u8 each_ci = 0; each_ci < nr_cis; ++each_ci) {
+    frames[each_ci] = ci_dma_ctrl_write_frame(address, datas[each_ci]);
+  }
+  ufi::ci::exec_void_cmd(rank, frames);
+}
+
+static inline void read_dma_ctrl(dpu_rank_t *rank, u8 ci_mask, u8 *data) {
+  ufi::exec_8bit_frame(
+  rank, ci_mask, CI_DMA_CTRL_READ_STRUCT,
+  CI_DMA_CTRL_READ_FRAME, data);
+}
+
+static inline void clear_dma_ctrl(dpu_rank_t *rank, u8 ci_mask) {
+  ufi::exec_void_frame(
+    rank, ci_mask, CI_DMA_CTRL_CLEAR_STRUCT,
+    CI_DMA_CTRL_CLEAR_FRAME);
+}
+
+static inline void thread_boot(dpu_rank_t *rank, u8 ci_mask, u8 thread) {
+  // assume prev == NULL
+  ufi::exec_void_frame(
+    rank, ci_mask, CI_THREAD_BOOT_STRUCT,
+    CI_THREAD_BOOT_FRAME(thread));
+}
+
+static inline void read_dpu_run(dpu_rank_t *rank, u8 ci_mask, u8 *run) {
+  ufi::exec_8bit_frame(
+    rank, ci_mask, CI_DPU_RUN_STATE_READ_STRUCT,
+    CI_DPU_RUN_STATE_READ_FRAME, run);
+}
+
+static inline void read_dpu_fault(dpu_rank_t *rank, u8 ci_mask, u8 *fault) {
+  ufi::exec_8bit_frame(
+    rank, ci_mask, CI_DPU_FAULT_STATE_READ_STRUCT,
+    CI_DPU_FAULT_STATE_READ_FRAME, fault);
+}
+} // namespace ufi
 
 /**
  * The optimized mux_switch API.
@@ -88,9 +339,9 @@ public:
     dpu_description_t desc = rank->description;
     const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
     const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
-    for (uint8_t each_slice = 0; each_slice < nr_cis; ++each_slice) {
+    for (uint8_t each_ci = 0; each_ci < nr_cis; ++each_ci) {
       dpu_bitfield_t host_mux_mram_state =
-        rank->runtime.control_interface.slice_info[each_slice].host_mux_mram_state;
+        rank->runtime.control_interface.slice_info[each_ci].host_mux_mram_state;
       if ((mux_for_host && __builtin_popcount(host_mux_mram_state) < nr_dpus_per_ci) ||
           (!mux_for_host && host_mux_mram_state)) {
         return true;
@@ -103,14 +354,23 @@ public:
     dpu_description_t desc = rank->description;
     const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
     const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
-    for (uint8_t each_slice = 0; each_slice < nr_cis; ++each_slice) {
-      rank->runtime.control_interface.slice_info[each_slice].host_mux_mram_state =
+    for (uint8_t each_ci = 0; each_ci < nr_cis; ++each_ci) {
+      rank->runtime.control_interface.slice_info[each_ci].host_mux_mram_state =
         (mux_for_host ? ((1 << nr_dpus_per_ci) - 1) : 0x0);
     }
     uint8_t ci_mask = ALL_CIS;
-    DPU_ASSERT((dpu_error_t)ufi_select_all_even_disabled(rank, &ci_mask));
+    UPMEM_DIRECT_ASSERT(ufi_select_all_even_disabled(rank, &ci_mask));
     assert(ci_mask == ALL_CIS);
-    DPU_ASSERT((dpu_error_t)ufi_set_mram_mux(rank, ci_mask, mux_for_host ? 0xFF : 0x00));
+    // ufi_set_mram_mux
+    u8 mux_value[DPU_MAX_NR_CIS];
+    for (u8 each_ci = 0; each_ci < nr_cis; ++each_ci) {
+      mux_value[each_ci] = mux_for_host ? 0 : 1;
+    }
+    ufi::write_dma_ctrl_datas(rank, ci_mask, 0x80, mux_value);
+    ufi::write_dma_ctrl(rank, ci_mask, 0x81, 0);
+	  ufi::write_dma_ctrl_datas(rank, ci_mask, 0x82, mux_value);
+	  ufi::write_dma_ctrl_datas(rank, ci_mask, 0x84, mux_value);
+    ufi::clear_dma_ctrl(rank, ci_mask);
   }
 
   static void switch_sync(dpu_rank_t *rank, bool mux_for_host) {
@@ -119,17 +379,17 @@ public:
     const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
     uint8_t ci_mask = ALL_CIS;
     // dpu_check_wavegen_mux_status_for_rank
-    DPU_ASSERT((dpu_error_t)ufi_write_dma_ctrl(rank, ci_mask, 0xFF, 0x02));
-    DPU_ASSERT((dpu_error_t)ufi_clear_dma_ctrl(rank, ci_mask));
+    ufi::write_dma_ctrl(rank, ci_mask, 0xFF, 0x02);
+    ufi::clear_dma_ctrl(rank, ci_mask);
     uint8_t result_array[DPU_MAX_NR_CIS];
     const uint8_t wavegen_expected = mux_for_host ? 0x00 : ((1 << 0) | (1 << 1));
     for (uint8_t each_dpu = 0; each_dpu < nr_dpus_per_ci; ++each_dpu) {
       uint32_t timeout = 100;
       bool should_retry = false;
       do {
-        DPU_ASSERT((dpu_error_t)ufi_read_dma_ctrl(rank, ci_mask, result_array));
-        for (uint8_t each_slice = 0; each_slice < nr_cis; ++each_slice) {
-          if ((result_array[each_slice] & 0x7B) != wavegen_expected) {
+        ufi::read_dma_ctrl(rank, ci_mask, result_array);
+        for (uint8_t each_ci = 0; each_ci < nr_cis; ++each_ci) {
+          if ((result_array[each_ci] & 0x7B) != wavegen_expected) {
             should_retry = true;
             break;
           }
@@ -158,20 +418,22 @@ class direct_launch {
 public:
   static void boot(dpu_rank_t *rank) {
     mux::switch_rank(rank, false);
-    // DPU_ASSERT(dpu_boot_rank(rank));
+#if defined(UPMEM_USE_DIRECT_LAUNCH)
     uint8_t ci_mask = ALL_CIS;
-    DPU_ASSERT((dpu_error_t)ufi_select_all(rank, &ci_mask));
-    DPU_ASSERT((dpu_error_t)ufi_thread_boot(rank, ci_mask, DPU_BOOT_THREAD, NULL));
+    UPMEM_DIRECT_ASSERT(ufi_select_all(rank, &ci_mask));
+    ufi::thread_boot(rank, ci_mask, DPU_BOOT_THREAD);
+#else
+    DPU_ASSERT(dpu_boot_rank(rank));
+#endif
   }
 
   static void poll_status(dpu_rank_t *rank, bool *done, bool *fault) {
-    //DPU_ASSERT(dpu_poll_rank(rank));
-    //DPU_ASSERT(dpu_status_rank(rank, done, fault));
+#if defined(UPMEM_USE_DIRECT_LAUNCH)
     uint8_t ci_mask = ALL_CIS;
     dpu_bitfield_t poll_running[DPU_MAX_NR_CIS], poll_fault[DPU_MAX_NR_CIS];
-    DPU_ASSERT((dpu_error_t)ufi_select_all(rank, &ci_mask));
-    DPU_ASSERT((dpu_error_t)ufi_read_dpu_run(rank, ci_mask, poll_running));
-    DPU_ASSERT((dpu_error_t)ufi_read_dpu_fault(rank, ci_mask, poll_fault));
+    UPMEM_DIRECT_ASSERT(ufi_select_all(rank, &ci_mask));
+    ufi::read_dpu_run(rank, ci_mask, poll_running);
+    ufi::read_dpu_fault(rank, ci_mask, poll_fault);
     const uint8_t nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
     *done = true;
     *fault = false;
@@ -182,6 +444,10 @@ public:
       *done = *done && (ci_running == 0);
       *fault = *fault || (ci_fault != 0);
     }
+#else
+    DPU_ASSERT(dpu_poll_rank(rank));
+    DPU_ASSERT(dpu_status_rank(rank, done, fault));
+#endif
   }
 };
 
