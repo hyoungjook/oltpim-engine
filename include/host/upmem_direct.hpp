@@ -54,6 +54,13 @@ struct dpu_region_address_translation {
     int *mmap_hybrid;
 #endif
 };
+typedef struct _hw_dpu_rank_context_t {
+    /* Hybrid mode: Address of control interfaces when memory mapped
+     * Perf mode:   Base region address, mappings deal with offset to target control interfaces
+     * Safe mode:   Buffer handed to the driver
+     */
+    uint64_t *control_interfaces;
+} * hw_dpu_rank_context_t;
 typedef struct _fpga_allocation_parameters_t {
   bool activate_ila;
   bool activate_filtering_ila;
@@ -234,6 +241,40 @@ static inline void ReceiveFromRankMRAM(
   __builtin_ia32_mfence();
 }
 
+static void write_to_cis(
+    dpu_region_address_translation *tr,
+    void *base_region_addr, u64 *block_data) {
+  u64 *ci_address = (u64*)((u8*)base_region_addr + 0x20000);
+  byte_interleave_avx512(block_data, ci_address, true);
+  tr->one_read = false;
+}
+
+static void read_from_cis(
+    dpu_region_address_translation *tr,
+    void *base_region_addr, u64 *block_data) {
+  //#define NB_READS 3
+  //const u8 nb_reads = tr->one_read ? NB_READS - 1 : NB_READS;
+  // NOTE (hyoungjk): This significantly improves low-batch throughput
+  // and LLC misses. It works well on the latest (v1B on upmemcloud9) UPMEM PIMs.
+  constexpr u8 nb_reads = 1;
+  u64 input[8];
+  u64 *ci_address = (u64*)((u8*)base_region_addr + 0x20000 + 32 * 1024);
+  for (u8 i = 0; i < nb_reads; ++i) {
+    __builtin_ia32_clflushopt((uint8_t *)ci_address);
+    __builtin_ia32_mfence();
+    ((volatile u64*)input)[0] = *(ci_address + 0);
+    ((volatile u64*)input)[1] = *(ci_address + 1);
+    ((volatile u64*)input)[2] = *(ci_address + 2);
+    ((volatile u64*)input)[3] = *(ci_address + 3);
+    ((volatile u64*)input)[4] = *(ci_address + 4);
+    ((volatile u64*)input)[5] = *(ci_address + 5);
+    ((volatile u64*)input)[6] = *(ci_address + 6);
+    ((volatile u64*)input)[7] = *(ci_address + 7);
+  }
+  byte_interleave_avx512(input, block_data, false);
+  tr->one_read = true;
+}
+
 } // namespace xeon
 
 namespace ufi {
@@ -241,7 +282,23 @@ namespace ufi {
  * The optimized ufi API, modified from ufi.c and ufi_ci.c
  */
 namespace ci {
-static inline void compute_masks(struct dpu_rank_t *rank, const u64 *commands,
+static inline void commit_commands(dpu_rank_t *rank, u64 *commands) {
+  xeon::write_to_cis(
+    &((hw_dpu_rank_allocation_parameters_t)rank->description->_internals.data)->translate,
+    ((hw_dpu_rank_context_t)rank->_internals)->control_interfaces,
+    commands
+  );
+}
+
+static inline void update_commands(dpu_rank_t *rank, u64 *commands) {
+  xeon::read_from_cis(
+    &((hw_dpu_rank_allocation_parameters_t)rank->description->_internals.data)->translate,
+    ((hw_dpu_rank_context_t)rank->_internals)->control_interfaces,
+    commands
+  );
+}
+
+static inline void compute_masks(dpu_rank_t *rank, const u64 *commands,
 		u64 *masks, u64 *expected, u8 *cis, bool *is_done) {
 	u8 ci_mask = 0;
 	u8 nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
@@ -256,10 +313,10 @@ static inline void compute_masks(struct dpu_rank_t *rank, const u64 *commands,
 	*cis = ci_mask;
 }
 
-static inline bool determine_if_commands_are_finished(struct dpu_rank_t *rank,
+static inline bool determine_if_commands_are_finished(dpu_rank_t *rank,
     const u64 *data, const u64 *expected, const u64 *result_masks,
     u8 expected_color, bool *is_done) {
-	struct dpu_control_interface_context *context = &rank->runtime.control_interface;
+	dpu_control_interface_context *context = &rank->runtime.control_interface;
 	u8 nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
 	u8 each_ci;
 	u8 color, nb_bits_set, ci_mask, ci_color;
@@ -341,9 +398,9 @@ static void exec_cmd(struct dpu_rank_t *rank, u64 *commands)
 	// We can expect to have the issue by loading program to IRAM in loop for an hour
 send_cmd:
 	nr_retries = 100;
-  UPMEM_DIRECT_ASSERT(ci_commit_commands(rank, commands));
+  ci::commit_commands(rank, commands);
 	do {
-    UPMEM_DIRECT_ASSERT(ci_update_commands(rank, data));
+    ci::update_commands(rank, data);
 		in_progress = !determine_if_commands_are_finished(
 			rank, data, expected, result_masks, expected_color,
 			is_done);
@@ -363,7 +420,7 @@ send_cmd:
 		 * We make sure that we have the correct results by reading again (we may have timing issues).
 		 * todo(#85): this can be somewhat costly. We should try to integrate this additional read in a lower layer.
 		 */
-    UPMEM_DIRECT_ASSERT(ci_update_commands(rank, data));
+    ci::update_commands(rank, data);
 	}
 }
 
