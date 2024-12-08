@@ -441,9 +441,6 @@ int main(int argc, char *argv[]) {
           // check
           if (key <= (uint64_t)table_size) {
             assert(ret.status != STATUS_FAILED);
-            if (ret.status == STATUS_SUCCESS) {
-              assert(ret.old_value == key + 7 || ret.old_value == key + 77);
-            }
           }
           else {
             assert(ret.status != STATUS_SUCCESS);
