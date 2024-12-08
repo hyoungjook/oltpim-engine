@@ -649,16 +649,23 @@ static void boot(dpu_rank_t *rank) {
 static void poll_status(dpu_rank_t *rank, bool *done, bool *fault) {
 #if defined(UPMEM_USE_DIRECT_LAUNCH)
   uint8_t ci_mask = ALL_CIS;
-  dpu_bitfield_t poll_running[DPU_MAX_NR_CIS], poll_fault[DPU_MAX_NR_CIS];
+  dpu_bitfield_t poll_running[DPU_MAX_NR_CIS];
   UPMEM_DIRECT_ASSERT(ufi_select_all(rank, &ci_mask));
   internal::ufi::read_dpu_run(rank, ci_mask, poll_running);
+#ifndef NDEBUG
+  dpu_bitfield_t poll_fault[DPU_MAX_NR_CIS];
   internal::ufi::read_dpu_fault(rank, ci_mask, poll_fault);
+#endif
   const uint8_t nr_cis = rank->description->hw.topology.nr_of_control_interfaces;
   *done = true;
   *fault = false;
   for (uint8_t each_ci = 0; each_ci < nr_cis; ++each_ci) {
     dpu_selected_mask_t mask_all = rank->runtime.control_interface.slice_info[each_ci].enabled_dpus;
+#ifndef NDEBUG
     dpu_bitfield_t ci_fault = poll_fault[each_ci] & mask_all;
+#else
+    const dpu_bitfield_t ci_fault = 0;
+#endif
     dpu_bitfield_t ci_running = (poll_running[each_ci] & mask_all) & (~ci_fault);
     *done = *done && (ci_running == 0);
     *fault = *fault || (ci_fault != 0);
