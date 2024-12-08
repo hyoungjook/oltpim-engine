@@ -95,7 +95,7 @@ void rank::load(const char *binary_path) {
 }
 
 bool rank::launch(bool async) {
-  direct_launch::boot(_rank);
+  direct::launch::boot(_rank);
   if (!async) {
     bool fault = false;
     while (true) {
@@ -108,7 +108,7 @@ bool rank::launch(bool async) {
 
 bool rank::is_done(bool *fault) {
   bool _done, _fault;
-  direct_launch::poll_status(_rank, &_done, &_fault);
+  direct::launch::poll_status(_rank, &_done, &_fault);
   if (fault) *fault = _fault;
   return _done;
 }
@@ -170,7 +170,6 @@ void rank::copy(uint32_t transfer_id, uint32_t length, bool direction_to_dpu, ui
     get_copy_fn(mem_type, direction_to_dpu);
 
   // Do copy
-  mux::switch_rank(_rank, true);
   DPU_ASSERT(copy_fn(_rank, matrix));
 
   // Restore offset
@@ -225,10 +224,10 @@ void *rank::get_copy_fn(memory_type mem_type, bool direction_to_dpu) {
   case memory_type::MRAM: {
     if (direction_to_dpu)
       //return (void*)dpu_copy_to_mrams;              // MRAM, CPU_TO_PIM
-      return (void*)upmem::direct::copy_to_mrams;
+      return (void*)upmem::direct::copy::copy_to_mrams;
     else
       //return (void*)dpu_copy_from_mrams;            // MRAM, PIM_TO_CPU
-      return (void*)upmem::direct::copy_from_mrams;
+      return (void*)upmem::direct::copy::copy_from_mrams;
   }
   case memory_type::WRAM: {
     if (direction_to_dpu)
