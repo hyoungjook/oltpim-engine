@@ -1,6 +1,8 @@
 #include "upmem_rank.hpp"
 #include "upmem_direct.hpp"
 
+#define UPMEM_DIRECT_DATA
+
 extern "C" {
   #include <dpu.h>
   #include <dpu_config.h>
@@ -222,12 +224,17 @@ rank::memory_type rank::fill_transfer_matrix(dpu_transfer_matrix *matrix,
 void *rank::get_copy_fn(memory_type mem_type, bool direction_to_dpu) {
   switch (mem_type) {
   case memory_type::MRAM: {
+#if defined(UPMEM_DIRECT_DATA)
     if (direction_to_dpu)
-      //return (void*)dpu_copy_to_mrams;              // MRAM, CPU_TO_PIM
       return (void*)upmem::direct::copy::copy_to_mrams;
     else
-      //return (void*)dpu_copy_from_mrams;            // MRAM, PIM_TO_CPU
       return (void*)upmem::direct::copy::copy_from_mrams;
+#else
+    if (direction_to_dpu)
+      return (void*)dpu_copy_to_mrams;              // MRAM, CPU_TO_PIM
+    else
+      return (void*)dpu_copy_from_mrams;            // MRAM, PIM_TO_CPU
+#endif
   }
   case memory_type::WRAM: {
     if (direction_to_dpu)

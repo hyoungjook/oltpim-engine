@@ -552,7 +552,7 @@ namespace mux {
  * !!!!! ASSUMES ALL DPUS ARE ENABLED !!!!!
  * If not, it may fail. (not tested)
  */
-static bool is_switch_required(dpu_rank_t *rank, bool mux_for_host) {
+[[maybe_unused]] static bool is_switch_required(dpu_rank_t *rank, bool mux_for_host) {
   dpu_description_t desc = rank->description;
   const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
   const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
@@ -567,7 +567,7 @@ static bool is_switch_required(dpu_rank_t *rank, bool mux_for_host) {
   return false;
 }
 
-static void switch_begin(dpu_rank_t *rank, bool mux_for_host) {
+[[maybe_unused]] static void switch_begin(dpu_rank_t *rank, bool mux_for_host) {
   dpu_description_t desc = rank->description;
   const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
   const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
@@ -590,7 +590,7 @@ static void switch_begin(dpu_rank_t *rank, bool mux_for_host) {
   internal::ufi::clear_dma_ctrl(rank, ci_mask);
 }
 
-static void switch_sync(dpu_rank_t *rank, bool mux_for_host) {
+[[maybe_unused]] static void switch_sync(dpu_rank_t *rank, bool mux_for_host) {
   dpu_description_t desc = rank->description;
   const uint8_t nr_cis = desc->hw.topology.nr_of_control_interfaces;
   const uint8_t nr_dpus_per_ci = desc->hw.topology.nr_of_dpus_per_control_interface;
@@ -620,7 +620,7 @@ static void switch_sync(dpu_rank_t *rank, bool mux_for_host) {
   }
 }
 
-static void switch_rank(dpu_rank_t *rank, bool mux_for_host) {
+[[maybe_unused]] static void switch_rank(dpu_rank_t *rank, bool mux_for_host) {
 #if defined(UPMEM_USE_DIRECT_MUX)
   if (!is_switch_required(rank, mux_for_host)) return;
   switch_begin(rank, mux_for_host);
@@ -635,7 +635,7 @@ namespace launch {
 /**
  * The direct-inlined launch API.
  */
-static void boot(dpu_rank_t *rank) {
+[[maybe_unused]] static void boot(dpu_rank_t *rank) {
   mux::switch_rank(rank, false);
 #if defined(UPMEM_USE_DIRECT_LAUNCH)
   uint8_t ci_mask = ALL_CIS;
@@ -646,7 +646,7 @@ static void boot(dpu_rank_t *rank) {
 #endif
 }
 
-static void poll_status(dpu_rank_t *rank, bool *done, bool *fault) {
+[[maybe_unused]] static void poll_status(dpu_rank_t *rank, bool *done, bool *fault) {
 #if defined(UPMEM_USE_DIRECT_LAUNCH)
   uint8_t ci_mask = ALL_CIS;
   dpu_bitfield_t poll_running[DPU_MAX_NR_CIS];
@@ -682,7 +682,7 @@ namespace copy {
  * The direct PIM-CPU copy API using internal::xeon.
  * It allows CPU-PIM copy to occur entirely within the calling thread
  */
-static dpu_error_t copy_to_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
+[[maybe_unused]] static dpu_error_t copy_to_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
   mux::switch_rank(rank, true);
   dpu_description_t desc = rank->description;
   auto params = (hw_dpu_rank_allocation_parameters_t)(desc->_internals.data);
@@ -691,7 +691,7 @@ static dpu_error_t copy_to_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) 
   return DPU_OK;
 }
 
-static dpu_error_t copy_from_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
+[[maybe_unused]] static dpu_error_t copy_from_mrams(dpu_rank_t *rank, dpu_transfer_matrix *matrix) {
   mux::switch_rank(rank, true);
   dpu_description_t desc = rank->description;
   auto params = (hw_dpu_rank_allocation_parameters_t)(desc->_internals.data);

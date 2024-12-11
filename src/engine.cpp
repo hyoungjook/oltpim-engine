@@ -11,6 +11,8 @@
 #define DPU_BINARY "oltpim_dpu"
 #endif
 
+#define UPMEM_ENGINE_CPU_PIM_INTERLEAVED
+
 namespace oltpim {
 
 // physical core id
@@ -215,8 +217,10 @@ void rank_engine::push(request_base *req) {
 void rank_engine::process() {
   // Try acquire spinlock for this rank
   if (!_process_lock.test_and_set(std::memory_order_acquire)) {
+#if defined(UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
     switch (_process_phase) {
     case 0: {
+#endif
       // Phase 0: Push args and launch
 
       // Construct buffer & saved_requests (linked list of all requests)
@@ -290,6 +294,7 @@ void rank_engine::process() {
         _buffer.finalize_args();
         // Copy args to rank
         _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
+#if defined (UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
         // Launch
         _rank.launch(true);
         // Move to phase 1
@@ -297,6 +302,9 @@ void rank_engine::process() {
       }
     } break;
     case 1: {
+#else
+        _rank.launch(false);
+#endif
       // Phase 1: Check if PIM program is done
       // Then distribute return values and move to phase 0
 
@@ -326,11 +334,15 @@ void rank_engine::process() {
           req = req_next;
         }
 
+#if defined(UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
         // Move to phase 0
         _process_phase = 0;
       }
     } break;
     }
+#else
+    }}
+#endif
     // Release spinlock
     _process_lock.clear(std::memory_order_release);
   }
