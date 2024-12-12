@@ -27,4 +27,10 @@ struct request_scan {
 // args_gc_t should match the code in engine.cpp:rank_buffer::push_gc_lsn()
 static_assert(sizeof(args_gc_t) == sizeof(uint64_t), "");
 
+// used only for testing offload-index-only case
+using request_insertonly = request<request_type_insertonly, args_insertonly_t, rets_insertonly_t>;
+using request_getonly = request<request_type_getonly, args_getonly_t, rets_getonly_t>;
+static_assert(sizeof(request_insert) >= sizeof(request_insertonly), "");
+static_assert(sizeof(request_get) >= sizeof(request_getonly), "");
+
 }

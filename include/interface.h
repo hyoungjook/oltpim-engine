@@ -145,6 +145,21 @@ _(8, gc, 0,                         \
   , 8,                              \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
+_(9, insertonly, 0,                 \
+    uint64_t key;                   \
+    uint32_t value;                 \
+    uint8_t index_id;               \
+  , 16,                             \
+    uint8_t status;                 \
+    uint8_t pad[7];                 \
+  , 8, 0, __VA_ARGS__)              \
+_(10, getonly, 1,                   \
+    uint64_t key;                   \
+    uint8_t index_id;               \
+  , 16,                             \
+    uint32_t value;                 \
+    uint8_t status;                 \
+  , 8, 0, __VA_ARGS__)              \
 
 #define NUM_PRIORITIES 2
 #define REQUEST_MAX_ARGS_SIZE 40

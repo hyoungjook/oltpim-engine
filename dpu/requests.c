@@ -249,3 +249,23 @@ static inline void process_abort(args_abort_t *args, __mram_ptr uint8_t *_) {
 static inline void process_gc(args_gc_t *args, __mram_ptr uint8_t *_) {
   gc_update_lsn(args->gc_lsn);
 }
+
+/**
+ * *only requests for index-only (no version chain) execution
+ * For the entire program lifetime, either only the requests above this line
+ * or the requests below this line should be executed.
+ * Also, it only inserts into index_id=0.
+ */
+static inline void process_insertonly(args_insertonly_t *args, __mram_ptr uint8_t *mrets) {
+  __dma_aligned rets_insertonly_t rets;
+  btree_val_t old_val = btree_insert(index_trees[args->index_id], args->key, args->value);
+  rets.status = (old_val == BTREE_NOVAL);
+  mram_write(&rets, mrets, sizeof(rets_insertonly_t));
+}
+
+static inline void process_getonly(args_getonly_t *args, __mram_ptr uint8_t *mrets) {
+  __dma_aligned rets_getonly_t rets;
+  rets.value = btree_get(index_trees[args->index_id], args->key);
+  rets.status = (rets.value != BTREE_NOVAL);
+  mram_write(&rets, mrets, sizeof(rets_getonly_t));
+}
