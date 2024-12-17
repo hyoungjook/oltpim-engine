@@ -12,7 +12,7 @@
 #define DPU_BUFFER_SIZE (128 * 1024)
 
 // index initialization
-#define DPU_MAX_NUM_INDEXES (32)
+#define DPU_MAX_NUM_INDEXES (64)
 #define DPU_NUM_INDEXES_SYMBOL global_num_indexes_
 #define DPU_INDEX_INFOS_SYMBOL global_index_infos_
 typedef struct _index_info {
