@@ -213,8 +213,10 @@ void btree_scan(btree_t bt, btree_key_t *keys,
   // Edge case
   if (range_scan && !(slot < BT_DEGREE)) {
     node_id = node_buf.arr.leaf.next;
-    node_read(&node_buf, node_id);
-    slot = node_traverse(&node_buf, keys[0]);
+    if (node_id != node_id_null) {
+      node_read(&node_buf, node_id);
+      slot = node_traverse(&node_buf, keys[0]);
+    }
   }
 
   // No value found
