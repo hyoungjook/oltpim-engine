@@ -329,11 +329,11 @@ int main(int argc, char *argv[]) {
       typename oltpim::request_scan<scan_length>::t req;
       const uint64_t lkey = (key / scan_length) * scan_length;
       const uint64_t rkey = lkey + scan_length - 1;
-      req.args.max_outs = scan_length;
-      req.args.index_id = 0;
+      req.args.xid_s.max_outs = scan_length;
+      req.args.xid_s.index_id = 0;
       req.args.keys[0] = lkey;
       req.args.keys[1] = rkey;
-      req.args.xid = xid;
+      req.args.xid_s.xid = xid;
       req.args.csn = begin_csn;
       int pim_id = key_to_pim(lkey);
       assert(key_to_pim(rkey) == pim_id);

@@ -90,21 +90,8 @@ _(2, update, 1,                     \
   , 32,                             \
     uint32_t oid;                   \
     uint8_t status;                 \
-  , 8, 0, __VA_ARGS__)             \
-_(3, updatermw, 1,                  \
-    uint64_t key;                   \
-    uint64_t new_value;             \
-    struct {                        \
-      uint64_t xid: 56;             \
-      uint8_t index_id;             \
-    } xid_s;                        \
-    uint64_t csn;                   \
-  , 32,                             \
-    uint64_t old_value;             \
-    uint32_t oid;                   \
-    uint8_t status;                 \
-  , 16, 0, __VA_ARGS__)             \
-_(4, remove, 1,                     \
+  , 8, 0, __VA_ARGS__)              \
+_(3, remove, 1,                     \
     uint64_t key;                   \
     struct {                        \
       uint64_t xid: 56;             \
@@ -116,36 +103,37 @@ _(4, remove, 1,                     \
     uint8_t status;                 \
     uint8_t pad[3];                 \
   , 8, 0, __VA_ARGS__)              \
-_(5, scan, 1,                       \
-    uint8_t max_outs;               \
-    uint8_t index_id;               \
-    uint8_t pad[6];                 \
+_(4, scan, 1,                       \
+    struct {                        \
+      uint8_t max_outs;             \
+      uint8_t index_id;             \
+      uint64_t xid: 48;             \
+    } xid_s;                        \
     uint64_t keys[2];               \
-    uint64_t xid;                   \
     uint64_t csn;                   \
-  , 40,                             \
+  , 32,                             \
     uint8_t status;                 \
     uint8_t outs;                   \
     uint8_t pad[6];                 \
     uint64_t values[0];             \
   , 8, 8 * (__rn), __VA_ARGS__)     \
-_(6, commit, 0,                     \
+_(5, commit, 0,                     \
     uint64_t xid;                   \
     uint64_t csn;                   \
   , 16,                             \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(7, abort, 0,                      \
+_(6, abort, 0,                      \
     uint64_t xid;                   \
   , 8,                              \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(8, gc, 0,                         \
+_(7, gc, 0,                         \
     uint64_t gc_lsn;                \
   , 8,                              \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(9, insertonly, 0,                 \
+_(8, insertonly, 0,                 \
     uint64_t key;                   \
     uint32_t value;                 \
     uint8_t index_id;               \
@@ -153,7 +141,7 @@ _(9, insertonly, 0,                 \
     uint8_t status;                 \
     uint8_t pad[7];                 \
   , 8, 0, __VA_ARGS__)              \
-_(10, getonly, 1,                   \
+_(9, getonly, 1,                    \
     uint64_t key;                   \
     uint8_t index_id;               \
   , 16,                             \
@@ -162,7 +150,7 @@ _(10, getonly, 1,                   \
   , 8, 0, __VA_ARGS__)              \
 
 #define NUM_PRIORITIES 2
-#define REQUEST_MAX_ARGS_SIZE 40
+#define REQUEST_MAX_ARGS_SIZE 32
 
 /* Secondary index value */
 #define SVALUE_MAKE(pim_id, oid) (((uint64_t)(pim_id) << 32) | ((uint64_t)(oid)))

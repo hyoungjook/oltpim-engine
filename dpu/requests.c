@@ -133,7 +133,7 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   mram_write(&rets, mrets, sizeof(rets_update_t));
 }
 
-static inline void process_updatermw(args_updatermw_t *args, __mram_ptr uint8_t *mrets) {
+/*static inline void process_updatermw(args_updatermw_t *args, __mram_ptr uint8_t *mrets) {
   // update with returning old_value. the rest is the same with update.
   const uint8_t index_id = args->xid_s.index_id;
   const uint64_t xid = args->xid_s.xid;
@@ -155,7 +155,7 @@ static inline void process_updatermw(args_updatermw_t *args, __mram_ptr uint8_t 
   rets.oid = oid;
   rets.status = status;
   mram_write(&rets, mrets, sizeof(rets_updatermw_t));
-}
+}*/
 
 static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets) {
   const uint8_t index_id = args->xid_s.index_id;
@@ -203,17 +203,18 @@ static bool scan_callback(oid_t oid, void *args) {
 }
 
 static inline void process_scan(args_scan_t *args, __mram_ptr uint8_t *mrets) {
-  assert_print(args->index_id < NUM_INDEXES);
+  const uint8_t index_id = args->xid_s.index_id;
+  assert_print(index_id < NUM_INDEXES);
   assert_print(args->keys[0] <= args->keys[1]);
   scan_callback_args scan_args;
-  scan_args.xid = args->xid;
+  scan_args.xid = args->xid_s.xid;
   scan_args.csn = args->csn;
   scan_args.output_array = (__mram_ptr uint64_t*)(mrets + sizeof(rets_scan_t));
-  scan_args.max_outs = args->max_outs;
+  scan_args.max_outs = args->xid_s.max_outs;
   scan_args.outs = 0;
   scan_args.status = STATUS_FAILED;
   // query btree
-  btree_scan(index_trees[args->index_id], (uint64_t*)&args->keys, scan_callback, &scan_args);
+  btree_scan(index_trees[index_id], (uint64_t*)&args->keys, scan_callback, &scan_args);
   __dma_aligned rets_scan_t rets;
   rets.status = scan_args.status;
   rets.outs = scan_args.outs;
