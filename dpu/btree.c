@@ -211,7 +211,7 @@ void btree_scan(btree_t bt, btree_key_t *keys,
   }
 
   // Edge case
-  if (range_scan && !(slot < BT_DEGREE)) {
+  if (range_scan && !(slot < node_buf.num_keys)) {
     node_id = node_buf.arr.leaf.next;
     if (node_id != node_id_null) {
       node_read(&node_buf, node_id);
@@ -220,7 +220,7 @@ void btree_scan(btree_t bt, btree_key_t *keys,
   }
 
   // No value found
-  if (!(slot < BT_DEGREE) ||
+  if (!(slot < node_buf.num_keys) ||
         // range: no key in (key[0], key[1])
       (range_scan ? (node_buf.keys[slot] > keys[1])
         // !range: no key matches key[0]
