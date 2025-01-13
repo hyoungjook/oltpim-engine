@@ -18,18 +18,18 @@ MUTEX_INIT(oid_array_mutex);
 static __dma_aligned oid_value_t oid_buf[2];
 
 /* Helpers */
-static inline oid_value_t oid_array_read(oid_t oid) {
+static oid_value_t oid_array_read(oid_t oid) {
   mram_read(&oid_array[oid & (~0x1)], &oid_buf, 8);
   return oid_buf[oid & 0x1];
 }
 
-static inline void oid_array_write_after_read(oid_t oid, oid_value_t val) {
+static void oid_array_write_after_read(oid_t oid, oid_value_t val) {
   // assume oid_array_read(oid) is called and oid_buf is filled
   oid_buf[oid & 0x1] = val;
   mram_write(&oid_buf, &oid_array[oid & (~0x1)], 8);
 }
 
-static inline void oid_array_write(oid_t oid, oid_value_t val) {
+static void oid_array_write(oid_t oid, oid_value_t val) {
   oid_array_read(oid);
   oid_array_write_after_read(oid, val);
 }

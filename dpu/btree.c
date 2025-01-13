@@ -57,7 +57,7 @@ static __mram_noinit node_t node_alloc_pool[BTREE_ALLOCATOR_SIZE];
 MUTEX_INIT(node_alloc_mutex);
 static node_id_t node_alloc_next;
 
-static inline node_id_t node_alloc() {
+static __noinline node_id_t node_alloc() {
   mutex_lock(node_alloc_mutex);
   assert_print(node_alloc_next < BTREE_ALLOCATOR_SIZE);
   node_id_t node_id = node_alloc_next;
@@ -66,15 +66,15 @@ static inline node_id_t node_alloc() {
   return node_id;
 }
 
-static inline __mram_ptr node_t *node_get(node_id_t node_id) {
+static __mram_ptr node_t *node_get(node_id_t node_id) {
   return &node_alloc_pool[node_id];
 }
 
-static inline void node_read(node_t *wram_buf, node_id_t node_id) {
+static void node_read(node_t *wram_buf, node_id_t node_id) {
   mram_read(node_get(node_id), wram_buf, sizeof(node_t));
 }
 
-static inline void node_write(node_t *wram_buf, node_id_t node_id) {
+static void node_write(node_t *wram_buf, node_id_t node_id) {
   mram_write(wram_buf, node_get(node_id), sizeof(node_t));
 }
 

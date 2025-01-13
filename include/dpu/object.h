@@ -66,10 +66,14 @@ bool object_read(oid_t oid, xid_t xid, csn_t csn, object_value_t *value);
  * @param remove remove instead. ignore new_ & old_value arguments.
  * @param add_to_write_set output, whether it's first time updating this obj
  *  in this txn. only set if succeed.
+ * @param gc_begin store the newest obsolete value if gc occurred.
+ * @param gc_num store the number of obsolete values if gc occurred.
+ *  assumes it's already set to 0 before calling.
  * @return status: succeed / failed / conflict
  */
 status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value,
-  object_value_t *old_value, bool remove, bool *add_to_write_set);
+  object_value_t *old_value, bool remove, bool *add_to_write_set,
+  object_value_t *gc_begin, uint16_t *gc_num);
 
 /**
  * Finalize the object, on either commit or abort.

@@ -25,7 +25,7 @@ uint32_t args_offset, args_total_offset;
 __mram_ptr uint8_t *rets_ptr;
 uint8_t priority_frontier;
 
-static inline uint8_t *args_read_type(
+static uint8_t *args_read_type(
     __mram_ptr uint8_t *argp, uint8_t *cache, uint32_t modulo) {
   // Fetch 2B at argp[modulo]
   // modulo = (argp % 8)
@@ -33,7 +33,7 @@ static inline uint8_t *args_read_type(
   return &cache[modulo];
 }
 
-static inline void args_read_content(
+static void args_read_content(
     args_any_t *arg_buf, __mram_ptr uint8_t *argp, uint8_t *cache,
     uint32_t modulo, uint32_t args_size) {
   // Assume args_read_type() is already called and part of cache is filled up.

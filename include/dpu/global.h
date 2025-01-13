@@ -20,6 +20,12 @@
 }
 #endif
 
+/** 
+ * Some functions should not be inlined to reduce
+ * the IRAM footprint.
+*/
+#define __noinline __attribute__((noinline))
+
 /**
  * MRAM capacity breakdown configuration
  * 

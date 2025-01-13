@@ -49,6 +49,7 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
   const uint64_t xid = args->xid_s.xid;
   assert_print(index_id < NUM_INDEXES);
   __dma_aligned rets_insert_t rets;
+  rets.gc_num = 0;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = true; // default, if btree_insert succeeds
   // Allocate object
@@ -64,7 +65,7 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
     if (!object_read(oid, xid, args->csn, NULL)) {
       // already deleted version, try insert as an update
       status = object_update(oid, xid, args->csn, args->value,
-        NULL, false, &add_to_write_set);
+        NULL, false, &add_to_write_set, &rets.gc_begin, &rets.gc_num);
     }
     else {
       // visible version exists
@@ -116,13 +117,15 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   assert_print(index_id < NUM_INDEXES);
   assert_print(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_update_t rets;
+  rets.gc_num = 0;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
   oid_t oid = btree_get(index_trees[index_id], args->key);
   if (oid != BTREE_NOVAL) {
     status = object_update(oid, xid, args->csn, args->new_value,
-      NULL, false, &add_to_write_set);
+      &rets.old_value, false, &add_to_write_set,
+      &rets.gc_begin, &rets.gc_num);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
     wset_add(xid, oid);
@@ -163,12 +166,14 @@ static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets
   assert_print(index_id < NUM_INDEXES);
   assert_print(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_remove_t rets;
+  rets.gc_num = 0;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
   // query btree
   oid_t oid = btree_get(index_trees[index_id], args->key);
   if (oid != BTREE_NOVAL) {
-    status = object_update(oid, xid, args->csn, 0, NULL, true, &add_to_write_set);
+    status = object_update(oid, xid, args->csn, 0, NULL, true, &add_to_write_set,
+      &rets.gc_begin, &rets.gc_num);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
     wset_add(xid, oid);

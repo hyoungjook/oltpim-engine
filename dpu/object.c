@@ -67,19 +67,19 @@ static __dma_aligned version_freeptr ver_wram_buf;
 MUTEX_POOL_INIT(ver_access_mutexes, VERSION_ACCESS_MUTEX_NUM);
 
 /* Helpers */
-static inline version_id_t ver_pool_read_freeptr(version_id_t vid) {
+static version_id_t ver_pool_read_freeptr(version_id_t vid) {
   mram_read(&ver_alloc_pool[vid].freeptr, &ver_wram_buf, 8);
   return ver_wram_buf.p;
 }
 
-static inline void ver_pool_write_freeptr(version_id_t vid, version_id_t ptr) {
+static void ver_pool_write_freeptr(version_id_t vid, version_id_t ptr) {
   ver_wram_buf.meta.is_free_slot = 1;
   ver_wram_buf.p = ptr;
   mram_write(&ver_wram_buf, &ver_alloc_pool[vid].freeptr, 8);
 }
 
 // Should manually mark freeptr.meta.is_free=0 after this
-static version_id_t version_alloc() {
+static __noinline version_id_t version_alloc() {
   mutex_lock(ver_alloc_mutex);
   assert_print(ver_free_list_head != ver_free_list_tail); // OOM
   version_id_t new_free_list_head = ver_pool_read_freeptr(ver_free_list_head);
@@ -89,7 +89,7 @@ static version_id_t version_alloc() {
   return new_vid;
 }
 
-static void version_free(version_id_t vid) {
+static __noinline void version_free(version_id_t vid) {
   // Acquire access lock of ver to prevent reading the object during freeing
   mutex_pool_lock(&ver_access_mutexes, vid);
   mutex_lock(ver_alloc_mutex);
@@ -104,13 +104,13 @@ static void version_free(version_id_t vid) {
   mutex_pool_unlock(&ver_access_mutexes, vid);
 }
 
-static inline void version_read(version_id_t vid, version_t *buf) {
+static void version_read(version_id_t vid, version_t *buf) {
   mutex_pool_lock(&ver_access_mutexes, vid);
   mram_read(&ver_alloc_pool[vid], buf, sizeof(version_t));
   mutex_pool_unlock(&ver_access_mutexes, vid);
 }
 
-static inline void version_write(version_id_t vid, version_t *buf) {
+static void version_write(version_id_t vid, version_t *buf) {
   mutex_pool_lock(&ver_access_mutexes, vid);
   mram_write(buf, &ver_alloc_pool[vid], sizeof(version_t));
   mutex_pool_unlock(&ver_access_mutexes, vid);
@@ -208,7 +208,8 @@ bool object_read(oid_t oid, xid_t xid, csn_t csn, object_value_t *value) {
 }
 
 status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value,
-    object_value_t *old_value, bool remove, bool *add_to_write_set) {
+    object_value_t *old_value, bool remove, bool *add_to_write_set,
+    object_value_t *gc_begin, uint16_t *gc_num) {
   assert_print(!IS_SECONDARY_OID(oid));
   __dma_aligned version_t ver_buf;
   // get the vid
@@ -273,6 +274,7 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
         gc_lsn_t gc_lsn = gc_get_lsn();
         vid = ver_buf.v.next;
         bool collect = false;
+        uint16_t _gc_num = 0;
         while (vid != version_id_null) {
           version_read(vid, &ver_buf);
           const version_id_t vid_next = ver_buf.v.next;
@@ -290,9 +292,15 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
           }
           else { // collect
             version_free(vid);
+            if (gc_begin) { // record the first collected version's value
+              *gc_begin = ver_buf.v.value;
+              gc_begin = NULL;
+            }
+            ++_gc_num;
           }
           vid = vid_next;
         }
+        *gc_num = _gc_num;
       }
       return STATUS_SUCCESS;
     }

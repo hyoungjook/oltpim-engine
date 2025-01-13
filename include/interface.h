@@ -64,10 +64,11 @@ _(0, insert, 0,                     \
     } xid_s;                        \
     uint64_t csn;                   \
   , 32,                             \
+    uint64_t gc_begin;              \
     uint32_t oid;                   \
+    uint16_t gc_num;                \
     uint8_t status;                 \
-    uint8_t pad[3];                 \
-  , 8, 0, __VA_ARGS__)              \
+  , 16, 0, __VA_ARGS__)             \
 _(1, get, 1,                        \
     uint64_t key;                   \
     struct {                        \
@@ -88,9 +89,12 @@ _(2, update, 1,                     \
     } xid_s;                        \
     uint64_t csn;                   \
   , 32,                             \
+    uint64_t old_value;             \
+    uint64_t gc_begin;              \
     uint32_t oid;                   \
+    uint16_t gc_num;                \
     uint8_t status;                 \
-  , 8, 0, __VA_ARGS__)              \
+  , 24, 0, __VA_ARGS__)             \
 _(3, remove, 1,                     \
     uint64_t key;                   \
     struct {                        \
@@ -99,10 +103,11 @@ _(3, remove, 1,                     \
     } xid_s;                        \
     uint64_t csn;                   \
   , 24,                             \
+    uint64_t gc_begin;              \
     uint32_t oid;                   \
+    uint16_t gc_num;                \
     uint8_t status;                 \
-    uint8_t pad[3];                 \
-  , 8, 0, __VA_ARGS__)              \
+  , 16, 0, __VA_ARGS__)             \
 _(4, scan, 1,                       \
     struct {                        \
       uint8_t max_outs;             \

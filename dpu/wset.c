@@ -36,12 +36,12 @@ static ws_node_id_t ws_free_list_head;
 MUTEX_INIT(ws_alloc_mutex);
 static __dma_aligned ws_node_id_t ws_wram_buf[2];
 
-static inline ws_node_id_t ws_pool_read_freeptr(ws_node_id_t id) {
+static ws_node_id_t ws_pool_read_freeptr(ws_node_id_t id) {
   mram_read(&ws_alloc_pool[id].freeptr, &ws_wram_buf, 8);
   return ws_wram_buf[0];
 }
 
-static inline void ws_pool_write_freeptr(ws_node_id_t id, ws_node_id_t ptr) {
+static void ws_pool_write_freeptr(ws_node_id_t id, ws_node_id_t ptr) {
   ws_wram_buf[0] = ptr;
   mram_write(&ws_wram_buf, &ws_alloc_pool[id].freeptr, 8);
 }
@@ -73,15 +73,15 @@ static void ws_node_free(ws_node_id_t id) {
   mutex_unlock(ws_alloc_mutex);
 }
 
-static inline void ws_node_read_meta(ws_node_id_t id, ws_list_node_meta *meta) {
+static void ws_node_read_meta(ws_node_id_t id, ws_list_node_meta *meta) {
   mram_read(&ws_alloc_pool[id].n.meta, meta, sizeof(ws_list_node_meta));
 }
 
-static inline void ws_node_write_meta(ws_node_id_t id, ws_list_node_meta *meta) {
+static void ws_node_write_meta(ws_node_id_t id, ws_list_node_meta *meta) {
   mram_write(meta, &ws_alloc_pool[id].n.meta, sizeof(ws_list_node_meta));
 }
 
-static inline void ws_node_write_entry(ws_node_id_t id, uint32_t idx, oid_t entry) {
+static void ws_node_write_entry(ws_node_id_t id, uint32_t idx, oid_t entry) {
   __dma_aligned oid_t buf[2];
   mram_read(&ws_alloc_pool[id].n.items[idx & (~0x1)], &buf, 8);
   buf[idx & 0x1] = entry;
@@ -128,11 +128,11 @@ static void xid_map_init_global() {
   }
 }
 
-static inline void xid_pair_read(uint32_t hash_id, xid_map_pair_t *buf) {
+static void xid_pair_read(uint32_t hash_id, xid_map_pair_t *buf) {
   mram_read(&xid_map[hash_id], buf, sizeof(xid_map_pair_t));
 }
 
-static inline void xid_pair_write(uint32_t hash_id, xid_map_pair_t *buf) {
+static void xid_pair_write(uint32_t hash_id, xid_map_pair_t *buf) {
   mram_write(buf, &xid_map[hash_id], sizeof(xid_map_pair_t));
 }
 
@@ -142,7 +142,7 @@ typedef ws_node_id_t (*insert_callback)(ws_node_id_t, uint32_t);
 // robin hood hashing
 // if not found, call callback(ws_node_id_null) and store its return value
 // if found, call callback(old_value) and update to its return value
-static inline bool xid_map_insert(xid_t key, insert_callback callback, uint32_t arg) {
+static bool xid_map_insert(xid_t key, insert_callback callback, uint32_t arg) {
   uint32_t hash_id = key & HASHMAP_MASK;
   xid_map_pair_t *const wram_buf = &xid_pair_buf[0];
   xid_map_pair_t *const insert_target = &xid_pair_buf[1];
@@ -178,7 +178,7 @@ static inline bool xid_map_insert(xid_t key, insert_callback callback, uint32_t 
   }
 }
 
-static inline ws_node_id_t xid_map_get_delete(xid_t key) {
+static ws_node_id_t xid_map_get_delete(xid_t key) {
   uint32_t hash_id = key & HASHMAP_MASK;
   xid_map_pair_t *const wram_buf = &xid_pair_buf[0];
   while (true) {
