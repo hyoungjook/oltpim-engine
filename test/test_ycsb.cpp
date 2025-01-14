@@ -141,7 +141,8 @@ int main(int argc, char *argv[]) {
   engine.init(oltpim::engine::config{
     .num_ranks_per_numa_node = num_ranks_per_numa_node,
     .alloc_fn = nullptr,
-    .enable_gc = false
+    .enable_gc = false,
+    .sample_core_dump = false
   });
 
   // Required to pin host threads to cores

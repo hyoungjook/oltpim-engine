@@ -38,6 +38,9 @@ add_custom_target(build_dpu_binary ALL DEPENDS ${DPU_BINARY})
 file(REAL_PATH ${DPU_BINARY} DPU_BINARY_PATH BASE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
 # Host codes: only *.cpp
+configure_file(test/analyze_sample_dpu.py analyze_sample_dpu.py COPYONLY)
+file(REAL_PATH analyze_sample_dpu.py ANALYZE_SAMPLE_DPU_PATH BASE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
 include_directories(
   upmem-sdk-runtime/commons/include
   upmem-sdk-runtime/commons/src/properties
@@ -58,6 +61,7 @@ execute_process(COMMAND dpu-pkg-config --libs dpu
 set(CFLAGS
   ${COMMON_CFLAGS} ${CFLAGS_DPU_CONFIG}
   -DDPU_BINARY=\"${DPU_BINARY_PATH}\"
+  -DANALYZE_SAMPLE_DPU_PATH=\"${ANALYZE_SAMPLE_DPU_PATH}\"
   -std=c++20 -fcoroutines -march=native
 )
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
@@ -73,3 +77,7 @@ target_link_libraries(${HOST_LIB} PRIVATE ${LDFLAGS} numa)
 add_executable(test_ycsb test/test_ycsb.cpp)
 target_compile_options(test_ycsb PRIVATE ${CFLAGS})
 target_link_libraries(test_ycsb PRIVATE ${HOST_LIB})
+
+add_executable(simulate_sample_dpu test/simulate_sample_dpu.cpp)
+target_compile_options(simulate_sample_dpu PRIVATE ${COMMON_CFLAGS} ${CFLAGS_DPU_CONFIG})
+target_link_libraries(simulate_sample_dpu PRIVATE ${LDFLAGS_DPU_CONFIG})

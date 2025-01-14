@@ -4,6 +4,7 @@
 #include <numa.h>
 #include <assert.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include "engine.hpp"
 
 // These should be defined at compile time.
@@ -11,9 +12,19 @@
 #define DPU_BINARY "oltpim_dpu"
 #endif
 
+#ifndef ANALYZE_SAMPLE_DPU_PATH
+#define ANALYZE_SAMPLE_DPU_PATH "analyze_sample_dpu.py"
+#endif
+
 #define UPMEM_ENGINE_CPU_PIM_INTERLEAVED
 
 namespace oltpim {
+
+uint64_t cur_us() {
+  struct timeval tv;
+  gettimeofday(&tv, 0);
+  return ((uint64_t)tv.tv_sec) * 1000000 + tv.tv_usec;
+}
 
 // physical core id
 static thread_local int my_numa_id = -1;
@@ -205,6 +216,12 @@ int rank_engine::init(config conf, information info) {
   _sent_gc_lsn = 0;
   _recent_gc_lsn = 0;
 
+  // Energy
+  _sample_core_dump = conf.sample_core_dump;
+  _core_dump_sampled = false;
+  _pim_time_measure = false;
+  _pim_time_us = 0;
+
   // Return number of dpus
   return _num_dpus;
 }
@@ -294,6 +311,10 @@ void rank_engine::process() {
         _buffer.finalize_args();
         // Copy args to rank
         _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
+        try_sample_dpu_profiling();
+        if (_pim_time_measure) {
+          _pim_time_t0 = cur_us();
+        }
 #if defined (UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
         // Launch
         _rank.launch(true);
@@ -320,6 +341,9 @@ void rank_engine::process() {
       }
       if (pim_done) {
         //_rank.log_read(stdout); // debug
+        if (_pim_time_measure) {
+          _pim_time_us += (cur_us() - _pim_time_t0);
+        }
 
         // Copy rets from rank
         _rank.copy(dpu_rets_transfer_id, _buffer.max_rlength, false);
@@ -350,6 +374,33 @@ void rank_engine::process() {
 
 void rank_engine::print_log(int dpu_id) {
   _rank.log_read(stdout, false, dpu_id);
+}
+
+#define SAMPLE_DPU_CORE_DUMP_FILE "/tmp/sample_dpu_core_dump"
+
+void rank_engine::try_sample_dpu_profiling() {
+  if (!_sample_core_dump) return;
+  // Sample only once, in random
+  if (__builtin_expect(_rank_id != 0 || _core_dump_sampled, 1)) return;
+  // Sample if input has sufficient length
+  static constexpr uint32_t min_offset = 256;
+  if (_buffer.max_alength < sizeof(uint32_t) + min_offset) return;
+  // Find max offset dpu
+  uint32_t max_offset = 0;
+  int dpu = -1;
+  for (int d = 0; d < _buffer._num_dpus; ++d) {
+    if (_buffer.offsets[d] >= max_offset) {
+      dpu = d;
+    }
+  }
+  assert(dpu >= 0);
+  _rank.core_dump(dpu, SAMPLE_DPU_CORE_DUMP_FILE);
+  _core_dump_sampled = true;
+}
+
+void rank_engine::start_measure_pim_time() {
+  _pim_time_us = 0;
+  _pim_time_measure = true;
 }
 
 engine engine::g_engine;
@@ -431,6 +482,7 @@ void engine::init(config conf) {
       memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
       rank_config.alloc_fn = conf.alloc_fn;
       rank_config.enable_gc = conf.enable_gc;
+      rank_config.sample_core_dump = conf.sample_core_dump;
       rank_info.rank_id = rank_id;
       // allocate rank_engine in its local numa node
       auto* re = (rank_engine*)wrapped_alloc_fn(sizeof(rank_engine), each_node);
@@ -512,6 +564,56 @@ rank_engine::stats engine::get_stats() {
   }
   s /= _num_ranks;
   return s;
+}
+
+void engine::start_measurement() {
+  // Used to estimate PIM utilization
+  _rank_engines[0]->start_measure_pim_time();
+}
+
+double engine::compute_dpu_power(double elapsed_sec) {
+  if (!_rank_engines[0]->_core_dump_sampled) {
+    fprintf(stderr, "Core Dump is not sampled! Try reducing min_offset in oltpim::rank_engine::try_sample_dpu_profiling().\n");
+    return 0;
+  }
+
+  // PIM utilization
+  double pim_utilization = ((double)_rank_engines[0]->_pim_time_us / 1000000.0) / elapsed_sec;
+
+  // Compute power factor using SAMPLE_DPU_CORE_DUMP_FILE
+  pid_t compute_pid;
+  int compute_fd[2];
+  if (pipe(compute_fd) != 0) {
+    perror("pipe"); return 0;
+  }
+  compute_pid = fork();
+  if (compute_pid == 0) {
+    close(compute_fd[0]);
+    dup2(compute_fd[1], STDOUT_FILENO);
+    exit(execl("/usr/bin/python3", "python3", ANALYZE_SAMPLE_DPU_PATH,
+      "--dpu-binary", DPU_BINARY, "--dump-file", SAMPLE_DPU_CORE_DUMP_FILE,
+      "--pim-utilization", std::to_string(pim_utilization).c_str(), nullptr));
+  }
+  close(compute_fd[1]);
+  waitpid(compute_pid, nullptr, 0);
+  FILE *f = fdopen(compute_fd[0], "r");
+  if (!f) {
+    perror("fdopen"); return 0;
+  }
+  double power_factor = 0;
+  if (fscanf(f, "%lf", &power_factor) == EOF) {
+    perror("fscanf"); return 0;
+  }
+
+  //printf("pim_utilization: %lf, power_factor: %lf\n", pim_utilization, power_factor);
+
+  // Compute DPU power, based on UPMEM's worksheet
+  // (freq, vdd): (350, 0.5), (400, 0.66), (450, 0.82), (500, 1)
+  static const double dpu_freq = 350;
+  static const double dpu_vdd = 0.5;
+  double power_per_chip = dpu_freq * dpu_vdd / 500.0 * 900.0 * power_factor;
+  int num_chips = _num_ranks * 8; // 8 chips per rank, 8 DPUs per chip
+  return power_per_chip * num_chips / 1000.0; // mW to W
 }
 
 }

@@ -282,4 +282,25 @@ void rank::handle_fault() {
   }
 }
 
+void rank::core_dump(int dpu_id, const char *dump_file) {
+  struct dpu_t *dpu = &_rank->dpus[dpu_id];
+  dpu_description_t desc = dpu_get_description(_rank);
+  uint32_t nb_word_in_wram = desc->hw.memories.wram_size;
+  uint32_t wram_size = nb_word_in_wram * sizeof(dpuword_t);
+  uint32_t mram_size = desc->hw.memories.mram_size;
+  uint8_t *wram = new uint8_t[wram_size];
+  uint8_t *mram = new uint8_t[mram_size];
+  DPU_ASSERT(dpu_copy_from_wram_for_dpu(dpu, (dpuword_t*)wram, 0, nb_word_in_wram));
+  DPU_ASSERT(dpu_copy_from_mram(dpu, mram, 0, mram_size));
+  // My custom dump format
+  FILE *f = fopen(dump_file, "wb");
+  fwrite(&wram_size, sizeof(wram_size), 1, f);
+  fwrite(wram, sizeof(uint8_t), wram_size, f);
+  fwrite(&mram_size, sizeof(mram_size), 1, f);
+  fwrite(mram, sizeof(uint8_t), mram_size, f);
+  fclose(f);
+  delete [] wram;
+  delete [] mram;
+}
+
 }

@@ -35,6 +35,7 @@ class rank {
   static void static_free(void *dpu_rank);
 
   void handle_fault();
+  void core_dump(int dpu_id, const char *dump_file);
 
  private:
   enum memory_type {
