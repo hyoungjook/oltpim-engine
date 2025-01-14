@@ -25,7 +25,7 @@ def generate_trace(dpu_binary, dump_file, trace_dir):
         trace_dir_abs
     ])
 
-def parse_trace(trace_dir, verbose):
+def parse_trace(trace_dir):
     dputrace_bin = 'dputrace'
     trace_file = str((pathlib.Path(trace_dir) / 'trace-0000-00').absolute())
     result_bytes = subprocess.run([
@@ -35,9 +35,6 @@ def parse_trace(trace_dir, verbose):
     ], capture_output=True)
     result_str = result_bytes.stdout.decode('utf-8')
     instructions = result_str.split('\n')
-
-    if verbose:
-        print(f'Trace: {len(instructions)} instructions')
 
     total_count = 0
     wram_count = 0
@@ -85,11 +82,13 @@ if __name__ == "__main__":
     args = parse_args()
     trace_dir = tempfile.TemporaryDirectory()
     generate_trace(args.dpu_binary, args.dump_file, trace_dir.name)
-    total, wram, mram, mram_size = parse_trace(trace_dir.name, args.verbose)
-    if args.verbose:
-        print(f'{total} TotalInsts, {wram} LdStInsts, {mram} LdmaSdmaInsts, {mram_size} AvgDmaSize')
+    total, wram, mram, mram_size = parse_trace(trace_dir.name)
     power_factor = compute_power_factor(total, wram, mram, mram_size, args.pim_utilization)
+    log = f'{total} TotalInsts, {wram} LdStInsts, {mram} LdmaSdmaInsts, {mram_size} AvgDmaSize, {args.pim_utilization} PIMUtilization: {power_factor} PowerFactor\n'
     if args.verbose:
-        print(f'{power_factor} PowerFactor')
+        print(log)
     else:
-        print(power_factor)
+        # Only print power_factor number, used by engine.cpp
+        with open('/tmp/analyze_sample_dpu.log', "w") as f:
+            f.write(log)
+        print(f'{power_factor}')

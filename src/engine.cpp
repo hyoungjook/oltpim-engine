@@ -217,10 +217,13 @@ int rank_engine::init(config conf, information info) {
   _recent_gc_lsn = 0;
 
   // Energy
-  _sample_core_dump = conf.sample_core_dump;
+  _enable_measure_energy = conf.enable_measure_energy;
+  _entered_measurement = false;
   _core_dump_sampled = false;
-  _pim_time_measure = false;
   _pim_time_us = 0;
+  _pim_time_t0 = 0;
+  _pim_util = 0;
+  _pim_rounds = 0;
 
   // Return number of dpus
   return _num_dpus;
@@ -312,7 +315,7 @@ void rank_engine::process() {
         // Copy args to rank
         _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
         try_sample_dpu_profiling();
-        if (_pim_time_measure) {
+        if (_entered_measurement) {
           _pim_time_t0 = cur_us();
         }
 #if defined (UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
@@ -341,7 +344,7 @@ void rank_engine::process() {
       }
       if (pim_done) {
         //_rank.log_read(stdout); // debug
-        if (_pim_time_measure) {
+        if (_entered_measurement) {
           _pim_time_us += (cur_us() - _pim_time_t0);
         }
 
@@ -379,28 +382,37 @@ void rank_engine::print_log(int dpu_id) {
 #define SAMPLE_DPU_CORE_DUMP_FILE "/tmp/sample_dpu_core_dump"
 
 void rank_engine::try_sample_dpu_profiling() {
-  if (!_sample_core_dump) return;
+  if (!_entered_measurement) return;
+  // Statistics for utilization
+  uint32_t max_offset = 0, total_offset = 0;
+  for (int d = 0; d < _buffer._num_dpus; ++d) {
+    if (_buffer.offsets[d] >= max_offset) {
+      max_offset = _buffer.offsets[d];
+    }
+    total_offset += _buffer.offsets[d];
+  }
+  _pim_util += (float)total_offset / max_offset / _buffer._num_dpus;
+  ++_pim_rounds;
+
   // Sample only once, in random
   if (__builtin_expect(_rank_id != 0 || _core_dump_sampled, 1)) return;
   // Sample if input has sufficient length
   static constexpr uint32_t min_offset = 256;
   if (_buffer.max_alength < sizeof(uint32_t) + min_offset) return;
-  // Find max offset dpu
-  uint32_t max_offset = 0;
-  int dpu = -1;
+  // Core dump
+  int sample_dpu = 0;
   for (int d = 0; d < _buffer._num_dpus; ++d) {
-    if (_buffer.offsets[d] >= max_offset) {
-      dpu = d;
-    }
+    if (_buffer.offsets[d] >= max_offset) sample_dpu = d;
   }
-  assert(dpu >= 0);
-  _rank.core_dump(dpu, SAMPLE_DPU_CORE_DUMP_FILE);
+  _rank.core_dump(sample_dpu, SAMPLE_DPU_CORE_DUMP_FILE);
   _core_dump_sampled = true;
 }
 
 void rank_engine::start_measure_pim_time() {
-  _pim_time_us = 0;
-  _pim_time_measure = true;
+  if (_enable_measure_energy) {
+    _pim_time_us = 0;
+    _entered_measurement = true;
+  }
 }
 
 engine engine::g_engine;
@@ -482,7 +494,7 @@ void engine::init(config conf) {
       memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
       rank_config.alloc_fn = conf.alloc_fn;
       rank_config.enable_gc = conf.enable_gc;
-      rank_config.sample_core_dump = conf.sample_core_dump;
+      rank_config.enable_measure_energy = conf.enable_measure_energy;
       rank_info.rank_id = rank_id;
       // allocate rank_engine in its local numa node
       auto* re = (rank_engine*)wrapped_alloc_fn(sizeof(rank_engine), each_node);
@@ -567,8 +579,8 @@ rank_engine::stats engine::get_stats() {
 }
 
 void engine::start_measurement() {
-  // Used to estimate PIM utilization
-  _rank_engines[0]->start_measure_pim_time();
+  // Used to estimate pim energy
+  for (auto &re: _rank_engines) re->start_measure_pim_time();
 }
 
 double engine::compute_dpu_power(double elapsed_sec) {
@@ -578,7 +590,13 @@ double engine::compute_dpu_power(double elapsed_sec) {
   }
 
   // PIM utilization
-  double pim_utilization = ((double)_rank_engines[0]->_pim_time_us / 1000000.0) / elapsed_sec;
+  double pim_utilization = 0;
+  for (auto &re: _rank_engines) {
+    double rank_util = ((double)re->_pim_time_us / 1000000.0) / elapsed_sec;
+    double pim_util = re->_pim_util / re->_pim_rounds;
+    pim_utilization += (rank_util * pim_util);
+  }
+  pim_utilization /= _rank_engines.size();
 
   // Compute power factor using SAMPLE_DPU_CORE_DUMP_FILE
   pid_t compute_pid;

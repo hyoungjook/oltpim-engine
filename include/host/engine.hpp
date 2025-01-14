@@ -84,7 +84,7 @@ class rank_engine {
     index_info index_infos[DPU_MAX_NUM_INDEXES];
     rank_buffer::buf_alloc_fn alloc_fn;
     bool enable_gc;
-    bool sample_core_dump;
+    bool enable_measure_energy;
   };
   struct information { // info passed from parent engine
     int rank_id;
@@ -138,10 +138,11 @@ class rank_engine {
   uint64_t _sent_gc_lsn, _recent_gc_lsn;
 
   // Sample DPU execution for energy estimation
-  bool _sample_core_dump;
+  bool _enable_measure_energy;
+  bool _entered_measurement;
   bool _core_dump_sampled;
-  bool _pim_time_measure;
   uint64_t _pim_time_us, _pim_time_t0;
+  float _pim_util; uint64_t _pim_rounds;
   inline void try_sample_dpu_profiling();
   void start_measure_pim_time();
 
@@ -184,8 +185,8 @@ class engine {
     rank_buffer::buf_alloc_fn alloc_fn;
     // Enable garbage collection?
     bool enable_gc;
-    // Do core dump for sampled dpu?
-    bool sample_core_dump;
+    // Enable energy measurement?
+    bool enable_measure_energy;
   };
   void init(config conf);
   void optimize_for_numa_local_key();
