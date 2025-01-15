@@ -141,8 +141,9 @@ class rank_engine {
   bool _enable_measure_energy;
   bool _entered_measurement;
   bool _core_dump_sampled;
-  uint64_t _pim_time_us, _pim_time_t0;
-  float _pim_util; uint64_t _pim_rounds;
+  double _avg_pim_time_us; // sum of (pim_time * rank_util)
+  uint64_t _pim_time_t0;
+  float _rank_util;
   inline void try_sample_dpu_profiling();
   void start_measure_pim_time();
 

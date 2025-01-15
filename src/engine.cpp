@@ -220,10 +220,9 @@ int rank_engine::init(config conf, information info) {
   _enable_measure_energy = conf.enable_measure_energy;
   _entered_measurement = false;
   _core_dump_sampled = false;
-  _pim_time_us = 0;
+  _avg_pim_time_us = 0;
   _pim_time_t0 = 0;
-  _pim_util = 0;
-  _pim_rounds = 0;
+  _rank_util = 0;
 
   // Return number of dpus
   return _num_dpus;
@@ -315,9 +314,6 @@ void rank_engine::process() {
         // Copy args to rank
         _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
         try_sample_dpu_profiling();
-        if (_entered_measurement) {
-          _pim_time_t0 = cur_us();
-        }
 #if defined (UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
         // Launch
         _rank.launch(true);
@@ -345,7 +341,7 @@ void rank_engine::process() {
       if (pim_done) {
         //_rank.log_read(stdout); // debug
         if (_entered_measurement) {
-          _pim_time_us += (cur_us() - _pim_time_t0);
+          _avg_pim_time_us += (double)(cur_us() - _pim_time_t0) * _rank_util;
         }
 
         // Copy rets from rank
@@ -391,26 +387,29 @@ void rank_engine::try_sample_dpu_profiling() {
     }
     total_offset += _buffer.offsets[d];
   }
-  _pim_util += (float)total_offset / max_offset / _buffer._num_dpus;
-  ++_pim_rounds;
+  _rank_util = (float)total_offset / max_offset / _buffer._num_dpus;
 
   // Sample only once, in random
-  if (__builtin_expect(_rank_id != 0 || _core_dump_sampled, 1)) return;
-  // Sample if input has sufficient length
-  static constexpr uint32_t min_offset = 256;
-  if (_buffer.max_alength < sizeof(uint32_t) + min_offset) return;
-  // Core dump
-  int sample_dpu = 0;
-  for (int d = 0; d < _buffer._num_dpus; ++d) {
-    if (_buffer.offsets[d] >= max_offset) sample_dpu = d;
+  if (__builtin_expect(_rank_id == 0 && !_core_dump_sampled, 0)) {
+    // Sample if input has sufficient length
+    static constexpr uint32_t min_offset = 256;
+    if (_buffer.max_alength >= sizeof(uint32_t) + min_offset) {
+      // Core dump
+      int sample_dpu = 0;
+      for (int d = 0; d < _buffer._num_dpus; ++d) {
+        if (_buffer.offsets[d] >= max_offset) sample_dpu = d;
+      }
+      _rank.core_dump(sample_dpu, SAMPLE_DPU_CORE_DUMP_FILE);
+      _core_dump_sampled = true;
+    }
   }
-  _rank.core_dump(sample_dpu, SAMPLE_DPU_CORE_DUMP_FILE);
-  _core_dump_sampled = true;
+
+  // record pim time
+  _pim_time_t0 = cur_us();
 }
 
 void rank_engine::start_measure_pim_time() {
   if (_enable_measure_energy) {
-    _pim_time_us = 0;
     _entered_measurement = true;
   }
 }
@@ -592,9 +591,8 @@ double engine::compute_dpu_power(double elapsed_sec) {
   // PIM utilization
   double pim_utilization = 0;
   for (auto &re: _rank_engines) {
-    double rank_util = ((double)re->_pim_time_us / 1000000.0) / elapsed_sec;
-    double pim_util = re->_pim_util / re->_pim_rounds;
-    pim_utilization += (rank_util * pim_util);
+    double pim_util = ((double)re->_avg_pim_time_us / 1000000.0) / elapsed_sec;
+    pim_utilization += pim_util;
   }
   pim_utilization /= _rank_engines.size();
 
