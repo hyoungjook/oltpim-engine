@@ -85,6 +85,7 @@ class rank_engine {
     rank_buffer::buf_alloc_fn alloc_fn;
     bool enable_gc;
     bool enable_measure_energy;
+    bool enable_interleave;
   };
   struct information { // info passed from parent engine
     int rank_id;
@@ -147,6 +148,11 @@ class rank_engine {
   inline void try_sample_dpu_profiling();
   void start_measure_pim_time();
 
+  // interleave
+  bool _enable_interleave;
+  bool _process_phase_0();
+  bool _process_phase_1();
+
 public:
   // Statistics
   struct stats {
@@ -188,6 +194,8 @@ class engine {
     bool enable_gc;
     // Enable energy measurement?
     bool enable_measure_energy;
+    // Enable interleaving?
+    bool enable_interleave;
   };
   void init(config conf);
   void optimize_for_numa_local_key();

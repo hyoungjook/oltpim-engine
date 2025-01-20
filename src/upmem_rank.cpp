@@ -1,7 +1,9 @@
 #include "upmem_rank.hpp"
 #include "upmem_direct.hpp"
 
+#ifndef OLTPIM_DISABLE_DIRECT_API
 #define UPMEM_DIRECT_DATA
+#endif
 
 extern "C" {
   #include <dpu.h>

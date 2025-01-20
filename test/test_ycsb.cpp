@@ -142,7 +142,8 @@ int main(int argc, char *argv[]) {
     .num_ranks_per_numa_node = num_ranks_per_numa_node,
     .alloc_fn = nullptr,
     .enable_gc = false,
-    .enable_measure_energy = false
+    .enable_measure_energy = false,
+    .enable_interleave = true
   });
 
   // Required to pin host threads to cores

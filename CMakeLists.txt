@@ -49,7 +49,6 @@ include_directories(
   upmem-sdk-runtime/ufi/include/ufi
   upmem-sdk-runtime/verbose/src
 )
-set(HOST_LIB oltpim)
 execute_process(COMMAND dpu-pkg-config --cflags dpu
   OUTPUT_VARIABLE CFLAGS_DPU_CONFIG
   OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -68,15 +67,20 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -g")
 set(LDFLAGS ${LDFLAGS_DPU_CONFIG} pthread stdc++fs)
 file(GLOB SRC_FILES src/*.cpp)
-add_library(${HOST_LIB} STATIC ${SRC_FILES})
-add_dependencies(${HOST_LIB} build_dpu_binary)
-target_compile_options(${HOST_LIB} PRIVATE ${CFLAGS})
-target_link_libraries(${HOST_LIB} PRIVATE ${LDFLAGS} numa)
+add_library(oltpim STATIC ${SRC_FILES})
+add_dependencies(oltpim build_dpu_binary)
+target_compile_options(oltpim PRIVATE ${CFLAGS})
+target_link_libraries(oltpim PRIVATE ${LDFLAGS} numa)
+
+add_library(oltpim_nodirect STATIC ${SRC_FILES})
+add_dependencies(oltpim_nodirect build_dpu_binary)
+target_compile_options(oltpim_nodirect PRIVATE ${CFLAGS} -DOLTPIM_DISABLE_DIRECT_API)
+target_link_libraries(oltpim_nodirect PRIVATE ${LDFLAGS} numa)
 
 # Test codes
 add_executable(test_ycsb test/test_ycsb.cpp)
 target_compile_options(test_ycsb PRIVATE ${CFLAGS})
-target_link_libraries(test_ycsb PRIVATE ${HOST_LIB})
+target_link_libraries(test_ycsb PRIVATE oltpim)
 
 add_executable(simulate_sample_dpu test/simulate_sample_dpu.cpp)
 target_compile_options(simulate_sample_dpu PRIVATE ${COMMON_CFLAGS} ${CFLAGS_DPU_CONFIG})

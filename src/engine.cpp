@@ -16,8 +16,6 @@
 #define ANALYZE_SAMPLE_DPU_PATH "analyze_sample_dpu.py"
 #endif
 
-#define UPMEM_ENGINE_CPU_PIM_INTERLEAVED
-
 namespace oltpim {
 
 uint64_t cur_us() {
@@ -224,6 +222,9 @@ int rank_engine::init(config conf, information info) {
   _pim_time_t0 = 0;
   _rank_util = 0;
 
+  // Interleave
+  _enable_interleave = conf.enable_interleave;
+
   // Return number of dpus
   return _num_dpus;
 }
@@ -233,139 +234,145 @@ void rank_engine::push(request_base *req) {
   _request_lists_per_numa[my_numa_id][priority].push(req);
 }
 
-void rank_engine::process() {
-  // Try acquire spinlock for this rank
-  if (!_process_lock.test_and_set(std::memory_order_acquire)) {
-#if defined(UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
-    switch (_process_phase) {
-    case 0: {
-#endif
-      // Phase 0: Push args and launch
+bool rank_engine::_process_phase_0() {
+  // Phase 0: Push args and launch
 
-      // Construct buffer & saved_requests (linked list of all requests)
-      _saved_requests = nullptr;
-      request_base *last_req = nullptr;
-      bool something_exists = false;
-      assert(
-        (!_process_collect_only_numa_local_requests) ||
-        (my_numa_id == _rank.numa_node())
-      ); // on numa_local_key option, process() should be only called from numa-local thread.
-      for (int priority = 0; priority < num_priorities; ++priority) {
-        for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
-          if (_process_collect_only_numa_local_requests && (each_node != my_numa_id)) {
-            // This prevents the below move() function to do unnecessary
-            // atomic exchange on numa-remote variable.
-            continue;
-          }
-          request_base *req = _request_lists_per_numa[each_node][priority].move();
-          if (req && !something_exists) {
-            // lazy buffer initialization
-            something_exists = true;
-            _buffer.reset_offsets(true);
-            for (int p = 0; p < priority; ++p) {
-              _buffer.push_priority_separator();
-            }
-          }
-          while (req) {
-            assert(req->rank_id == (uint16_t)_rank_id);
-            // target of the current iteration: *req
-            // push req to buffer
-            _buffer.push_args(req);
-            // save next req
-            request_base *req_next = req->next;
-            // check there's return value
-            if (req->rlen == 0) {
-              // if req has no return value, don't push to the global linked list
-              // and mark done now
-              req->mark_done();
-              if (last_req) {
-                last_req->next = req_next;
-              }
-            }
-            else {
-              // connect req to the global linked list
-              if (last_req) {
-                last_req->next = req;
-              }
-              else { // the globally first req
-                _saved_requests = req;
-              }
-              // update iterators
-              last_req = req;
-            }
-            req = req_next;
-          }
-        }
-        // Insert separator
-        if (something_exists && (priority < num_priorities - 1)) {
+  // Construct buffer & saved_requests (linked list of all requests)
+  _saved_requests = nullptr;
+  request_base *last_req = nullptr;
+  bool something_exists = false;
+  assert(
+    (!_process_collect_only_numa_local_requests) ||
+    (my_numa_id == _rank.numa_node())
+  ); // on numa_local_key option, process() should be only called from numa-local thread.
+  for (int priority = 0; priority < num_priorities; ++priority) {
+    for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
+      if (_process_collect_only_numa_local_requests && (each_node != my_numa_id)) {
+        // This prevents the below move() function to do unnecessary
+        // atomic exchange on numa-remote variable.
+        continue;
+      }
+      request_base *req = _request_lists_per_numa[each_node][priority].move();
+      if (req && !something_exists) {
+        // lazy buffer initialization
+        something_exists = true;
+        _buffer.reset_offsets(true);
+        for (int p = 0; p < priority; ++p) {
           _buffer.push_priority_separator();
         }
       }
-      if (something_exists) {
-        // Finalize buffers
-        if (_enable_gc) {
-          uint64_t recent_gc_lsn = *(volatile uint64_t*)&_recent_gc_lsn;
-          if (_sent_gc_lsn < recent_gc_lsn) {
-            _sent_gc_lsn = recent_gc_lsn;
-            _buffer.push_gc_lsn(recent_gc_lsn);
+      while (req) {
+        assert(req->rank_id == (uint16_t)_rank_id);
+        // target of the current iteration: *req
+        // push req to buffer
+        _buffer.push_args(req);
+        // save next req
+        request_base *req_next = req->next;
+        // check there's return value
+        if (req->rlen == 0) {
+          // if req has no return value, don't push to the global linked list
+          // and mark done now
+          req->mark_done();
+          if (last_req) {
+            last_req->next = req_next;
           }
         }
-        _buffer.finalize_args();
-        // Copy args to rank
-        _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
-        try_sample_dpu_profiling();
-#if defined (UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
-        // Launch
-        _rank.launch(true);
-        // Move to phase 1
-        _process_phase = 1;
-      }
-    } break;
-    case 1: {
-#else
-        _rank.launch(false);
-#endif
-      // Phase 1: Check if PIM program is done
-      // Then distribute return values and move to phase 0
-
-      // Check done
-      bool pim_fault = false;
-      bool pim_done = _rank.is_done(&pim_fault);
-      if (pim_fault) {
-        while (!_rank.is_done());
-        fprintf(stderr, "Rank[%d] in fault\n", _rank_id);
-        _rank.log_read(stderr, true);
-        _rank.handle_fault();
-        abort();
-      }
-      if (pim_done) {
-        //_rank.log_read(stdout); // debug
-        if (_entered_measurement) {
-          _avg_pim_time_us += (double)(cur_us() - _pim_time_t0) * _rank_util;
+        else {
+          // connect req to the global linked list
+          if (last_req) {
+            last_req->next = req;
+          }
+          else { // the globally first req
+            _saved_requests = req;
+          }
+          // update iterators
+          last_req = req;
         }
-
-        // Copy rets from rank
-        _rank.copy(dpu_rets_transfer_id, _buffer.max_rlength, false);
-
-        // Distribute results: the traversal order should be the same as construction
-        _buffer.reset_offsets(false);
-        request_base *req = _saved_requests;
-        while (req) {
-          assert(req->rank_id == (uint16_t)_rank_id);
-          auto *req_next = _buffer.pop_rets(req);
-          req->mark_done();
-          req = req_next;
-        }
-
-#if defined(UPMEM_ENGINE_CPU_PIM_INTERLEAVED)
-        // Move to phase 0
-        _process_phase = 0;
+        req = req_next;
       }
-    } break;
     }
-#else
-    }}
-#endif
+    // Insert separator
+    if (something_exists && (priority < num_priorities - 1)) {
+      _buffer.push_priority_separator();
+    }
+  }
+  if (something_exists) {
+    // Finalize buffers
+    if (_enable_gc) {
+      uint64_t recent_gc_lsn = *(volatile uint64_t*)&_recent_gc_lsn;
+      if (_sent_gc_lsn < recent_gc_lsn) {
+        _sent_gc_lsn = recent_gc_lsn;
+        _buffer.push_gc_lsn(recent_gc_lsn);
+      }
+    }
+    _buffer.finalize_args();
+    // Copy args to rank
+    _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
+    try_sample_dpu_profiling();
+  }
+  return something_exists;
+}
+
+bool rank_engine::_process_phase_1() {
+  // Phase 1: Check if PIM program is done
+  // Then distribute return values and move to phase 0
+
+  // Check done
+  bool pim_fault = false;
+  bool pim_done = _rank.is_done(&pim_fault);
+  if (pim_fault) {
+    while (!_rank.is_done());
+    fprintf(stderr, "Rank[%d] in fault\n", _rank_id);
+    _rank.log_read(stderr, true);
+    _rank.handle_fault();
+    abort();
+  }
+  if (pim_done) {
+    //_rank.log_read(stdout); // debug
+    if (_entered_measurement) {
+      _avg_pim_time_us += (double)(cur_us() - _pim_time_t0) * _rank_util;
+    }
+
+    // Copy rets from rank
+    _rank.copy(dpu_rets_transfer_id, _buffer.max_rlength, false);
+
+    // Distribute results: the traversal order should be the same as construction
+    _buffer.reset_offsets(false);
+    request_base *req = _saved_requests;
+    while (req) {
+      assert(req->rank_id == (uint16_t)_rank_id);
+      auto *req_next = _buffer.pop_rets(req);
+      req->mark_done();
+      req = req_next;
+    }
+  }
+  return pim_done;
+}
+
+void rank_engine::process() {
+  // Try acquire spinlock for this rank
+  if (!_process_lock.test_and_set(std::memory_order_acquire)) {
+    if (_enable_interleave) {
+      switch (_process_phase) {
+      case 0: {
+        if (_process_phase_0()) {
+          _rank.launch(true);
+          _process_phase = 1;
+        }
+      } break;
+      case 1: {
+        if (_process_phase_1()) {
+          _process_phase = 0;
+        }
+      } break;
+      }
+    }
+    else {
+      if (_process_phase_0()) {
+        _rank.launch(false);
+        _process_phase_1();
+      }
+    }
     // Release spinlock
     _process_lock.clear(std::memory_order_release);
   }
@@ -493,6 +500,7 @@ void engine::init(config conf) {
       memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
       rank_config.alloc_fn = conf.alloc_fn;
       rank_config.enable_gc = conf.enable_gc;
+      rank_config.enable_interleave = conf.enable_interleave;
       rank_config.enable_measure_energy = conf.enable_measure_energy;
       rank_info.rank_id = rank_id;
       // allocate rank_engine in its local numa node

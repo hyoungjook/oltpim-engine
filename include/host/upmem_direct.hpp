@@ -7,8 +7,10 @@
 #include <libudev.h>
 #include <iostream>
 
+#ifndef OLTPIM_DISABLE_DIRECT_API
 #define UPMEM_USE_DIRECT_MUX
 #define UPMEM_USE_DIRECT_LAUNCH
+#endif
 
 extern "C" {
 /* Includes from UPMEM Host APIs and Low-Level APIs */
