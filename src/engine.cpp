@@ -590,54 +590,40 @@ void engine::start_measurement() {
   for (auto &re: _rank_engines) re->start_measure_pim_time();
 }
 
-double engine::compute_dpu_power(double elapsed_sec) {
+void engine::compute_dpu_stats(double elapsed_sec,
+    double &pim_util, double &wram_ratio, double &mram_ratio, double &mram_avg_size) {
   if (!_rank_engines[0]->_core_dump_sampled) {
     fprintf(stderr, "Core Dump is not sampled! Try reducing min_offset in oltpim::rank_engine::try_sample_dpu_profiling().\n");
-    return 0;
+    return;
   }
 
   // PIM utilization
-  double pim_utilization = 0;
+  pim_util = 0;
   for (auto &re: _rank_engines) {
-    double pim_util = ((double)re->_avg_pim_time_us / 1000000.0) / elapsed_sec;
-    pim_utilization += pim_util;
+    double util = ((double)re->_avg_pim_time_us / 1000000.0) / elapsed_sec;
+    pim_util += util;
   }
-  pim_utilization /= _rank_engines.size();
+  pim_util /= _rank_engines.size();
 
   // Compute power factor using SAMPLE_DPU_CORE_DUMP_FILE
   pid_t compute_pid;
   int compute_fd[2];
-  if (pipe(compute_fd) != 0) {
-    perror("pipe"); return 0;
-  }
+  if (pipe(compute_fd) != 0) {perror("pipe"); return;}
   compute_pid = fork();
   if (compute_pid == 0) {
     close(compute_fd[0]);
     dup2(compute_fd[1], STDOUT_FILENO);
     exit(execl("/usr/bin/python3", "python3", ANALYZE_SAMPLE_DPU_PATH,
       "--dpu-binary", DPU_BINARY, "--dump-file", SAMPLE_DPU_CORE_DUMP_FILE,
-      "--pim-utilization", std::to_string(pim_utilization).c_str(), nullptr));
+      nullptr));
   }
   close(compute_fd[1]);
   waitpid(compute_pid, nullptr, 0);
   FILE *f = fdopen(compute_fd[0], "r");
-  if (!f) {
-    perror("fdopen"); return 0;
-  }
-  double power_factor = 0;
-  if (fscanf(f, "%lf", &power_factor) == EOF) {
-    perror("fscanf"); return 0;
-  }
-
-  //printf("pim_utilization: %lf, power_factor: %lf\n", pim_utilization, power_factor);
-
-  // Compute DPU power, based on UPMEM's worksheet
-  // (freq, vdd): (350, 0.5), (400, 0.66), (450, 0.82), (500, 1)
-  static const double dpu_freq = 350;
-  static const double dpu_vdd = 0.5;
-  double power_per_chip = dpu_freq * dpu_vdd / 500.0 * 900.0 * power_factor;
-  int num_chips = _num_ranks * 8; // 8 chips per rank, 8 DPUs per chip
-  return power_per_chip * num_chips / 1000.0; // mW to W
+  if (!f) {perror("fdopen"); return;}
+  if (fscanf(f, "%lf", &wram_ratio) == EOF) {perror("fscanf"); return;}
+  if (fscanf(f, "%lf", &mram_ratio) == EOF) {perror("fscanf"); return;}
+  if (fscanf(f, "%lf", &mram_avg_size) == EOF) {perror("fscanf"); return;}
 }
 
 }

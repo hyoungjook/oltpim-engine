@@ -9,8 +9,6 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dpu-binary', type=str, required=True)
     parser.add_argument('--dump-file', type=str, required=True)
-    parser.add_argument('--pim-utilization', type=float, default=1.0)
-    parser.add_argument('--verbose', action='store_true')
     return parser.parse_args()
 
 def generate_trace(dpu_binary, dump_file, trace_dir):
@@ -63,32 +61,11 @@ def parse_trace(trace_dir):
 
     return (total_count, wram_count, mram_count, mram_avg_size)
 
-def compute_power_factor(total_count, wram_count, mram_count, mram_avg_size, pim_utilization):
-    # instruction ratio
-    ldst_ratio = float(wram_count) / total_count
-    dma_ratio = float(mram_count) / total_count
-    other_ratio = 1 - ldst_ratio - dma_ratio
-    # PIM utilization for noop
-    ldst_ratio *= pim_utilization
-    dma_ratio *= pim_utilization
-    other_ratio *= pim_utilization
-    noop_ratio = 1 - pim_utilization
-    return noop_ratio * 0.7 + \
-        other_ratio + \
-        ldst_ratio * 1.195 + \
-        dma_ratio * (9 + float(mram_avg_size) / 5.488)
-
 if __name__ == "__main__":
     args = parse_args()
     trace_dir = tempfile.TemporaryDirectory()
     generate_trace(args.dpu_binary, args.dump_file, trace_dir.name)
     total, wram, mram, mram_size = parse_trace(trace_dir.name)
-    power_factor = compute_power_factor(total, wram, mram, mram_size, args.pim_utilization)
-    log = f'{total} TotalInsts, {wram} LdStInsts, {mram} LdmaSdmaInsts, {mram_size} AvgDmaSize, {args.pim_utilization} PIMUtilization: {power_factor} PowerFactor\n'
-    if args.verbose:
-        print(log)
-    else:
-        # Only print power_factor number, used by engine.cpp
-        with open('/tmp/analyze_sample_dpu.log', "w") as f:
-            f.write(log)
-        print(f'{power_factor}')
+    wram_ratio = float(wram) / total
+    mram_ratio = float(mram) / total
+    print(f'{wram_ratio} {mram_ratio} {mram_size}')

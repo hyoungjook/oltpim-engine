@@ -222,7 +222,8 @@ class engine {
   rank_engine::stats get_stats();
 
   void start_measurement();
-  double compute_dpu_power(double elapsed_sec);
+  void compute_dpu_stats(double elapsed_sec,
+    double &pim_util, double &wram_ratio, double &mram_ratio, double &mram_avg_size);
 
  private:
   engine();
