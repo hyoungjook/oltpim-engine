@@ -65,7 +65,7 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
     if (!object_read(oid, xid, args->csn, NULL)) {
       // already deleted version, try insert as an update
       status = object_update(oid, xid, args->csn, args->value,
-        NULL, false, &add_to_write_set, &rets.gc_begin, &rets.gc_num);
+        NULL, false, true, &add_to_write_set, &rets.gc_begin, &rets.gc_num);
     }
     else {
       // visible version exists
@@ -124,7 +124,7 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   oid_t oid = btree_get(index_trees[index_id], args->key);
   if (oid != BTREE_NOVAL) {
     status = object_update(oid, xid, args->csn, args->new_value,
-      &rets.old_value, false, &add_to_write_set,
+      &rets.old_value, false, false, &add_to_write_set,
       &rets.gc_begin, &rets.gc_num);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
@@ -149,7 +149,7 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   oid_t oid = btree_get(index_trees[index_id], args->key);
   if (oid != BTREE_NOVAL) {
     status = object_update(oid, xid, args->csn, args->new_value,
-      &rets.old_value, false, &add_to_write_set);
+      &rets.old_value, false, false, &add_to_write_set);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {
     wset_add(xid, oid);
@@ -172,7 +172,7 @@ static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets
   // query btree
   oid_t oid = btree_get(index_trees[index_id], args->key);
   if (oid != BTREE_NOVAL) {
-    status = object_update(oid, xid, args->csn, 0, NULL, true, &add_to_write_set,
+    status = object_update(oid, xid, args->csn, 0, NULL, true, false, &add_to_write_set,
       &rets.gc_begin, &rets.gc_num);
   }
   if (status == STATUS_SUCCESS && add_to_write_set) {

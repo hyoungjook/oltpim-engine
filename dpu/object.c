@@ -208,7 +208,7 @@ bool object_read(oid_t oid, xid_t xid, csn_t csn, object_value_t *value) {
 }
 
 status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value,
-    object_value_t *old_value, bool remove, bool *add_to_write_set,
+    object_value_t *old_value, bool remove, bool maybe_null, bool *add_to_write_set,
     object_value_t *gc_begin, uint16_t *gc_num) {
   assert_print(!IS_SECONDARY_OID(oid));
   __dma_aligned version_t ver_buf;
@@ -219,7 +219,8 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
   retry_with_vid:
   if (vid == version_id_null) {
     // tried to update an invisible object
-    return STATUS_FAILED;
+    if (maybe_null) goto install;
+    else return STATUS_FAILED;
   }
   version_read(vid, &ver_buf);
   if (ver_buf.v.meta.is_free_slot) {
@@ -254,6 +255,7 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
     if (ver_buf.v.csn <= csn && !ver_buf.v.meta.deleted) {
       // Latest version is visible: update
       if (!remove && old_value) *old_value = ver_buf.v.value;
+      install:
       ver_buf.v.csn = xid;
       ver_buf.v.value = new_value;
       ver_buf.v.next = vid;
