@@ -198,10 +198,10 @@ int rank_engine::init(config conf, information info) {
       info.dpu_index_infos_symbol, (void**)(&conf.index_infos), true);
     _rank.copy(num_indexes_transfer_id, sizeof(uint64_t), true);
     _rank.copy(index_infos_transfer_id, sizeof(index_info) * DPU_MAX_NUM_INDEXES, true);
-    uint64_t enable_gc_buf = conf.enable_gc ? 1 : 0;
-    uint32_t enable_gc_transfer_id = _rank.register_dpu_transfer(
-      info.dpu_enable_gc_symbol, (void**)(&enable_gc_buf), true);
-    _rank.copy(enable_gc_transfer_id, sizeof(uint64_t), true);
+    uint64_t gc_prob_buf = (uint64_t)conf.gc_prob;
+    uint32_t gc_transfer_id = _rank.register_dpu_transfer(
+      info.dpu_gc_prob_symbol, (void**)(&gc_prob_buf), true);
+    _rank.copy(gc_transfer_id, sizeof(uint64_t), true);
   }
 
   // Lock
@@ -210,7 +210,7 @@ int rank_engine::init(config conf, information info) {
   _process_collect_only_numa_local_requests = false;
 
   // GC
-  _enable_gc = conf.enable_gc;
+  _enable_gc = conf.gc_prob > 0;
   _sent_gc_lsn = 0;
   _recent_gc_lsn = 0;
 
@@ -444,7 +444,7 @@ void engine::init(config conf) {
   rank_info.dpu_rets_symbol = TOSTRING(DPU_RETS_SYMBOL);
   rank_info.dpu_num_indexes_symbol = TOSTRING(DPU_NUM_INDEXES_SYMBOL);
   rank_info.dpu_index_infos_symbol = TOSTRING(DPU_INDEX_INFOS_SYMBOL);
-  rank_info.dpu_enable_gc_symbol = TOSTRING(DPU_ENABLE_GC_SYMBOL);
+  rank_info.dpu_gc_prob_symbol = TOSTRING(DPU_GC_PROB_SYMBOL);
 
   OLTPIM_ASSERT(numa_available() >= 0);
   _num_numa_nodes = numa_max_node() + 1;
@@ -490,6 +490,8 @@ void engine::init(config conf) {
   _num_dpus = 0;
   int rank_id = 0;
   auto wrapped_alloc_fn = rank_buffer::wrap_alloc_fn(conf.alloc_fn);
+  uint32_t converted_gc_prob = (uint32_t)(conf.gc_prob * DPU_GC_PROB_BASE + 0.5);
+  converted_gc_prob = std::min<uint32_t>(converted_gc_prob, DPU_GC_PROB_BASE);
   for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
     assert(dpu_ranks[each_node].size() == (size_t)_num_ranks_per_numa_node);
     for (int each_rank = 0; each_rank < _num_ranks_per_numa_node; ++each_rank) {
@@ -499,7 +501,7 @@ void engine::init(config conf) {
       rank_config.num_indexes = (uint32_t)_index_infos.size();
       memcpy(&rank_config.index_infos, &_index_infos[0], sizeof(index_info) * _index_infos.size());
       rank_config.alloc_fn = conf.alloc_fn;
-      rank_config.enable_gc = conf.enable_gc;
+      rank_config.gc_prob = converted_gc_prob;
       rank_config.enable_interleave = conf.enable_interleave;
       rank_config.enable_measure_energy = conf.enable_measure_energy;
       rank_info.rank_id = rank_id;
@@ -517,7 +519,7 @@ void engine::init(config conf) {
   OLTPIM_ASSERT(rank_id == _num_ranks);
   OLTPIM_ASSERT(_num_dpus == _num_ranks * (int)NUM_DPUS_PER_RANK);
   _num_dpus_per_numa_node = _num_dpus / _num_numa_nodes;
-  _enable_gc = conf.enable_gc;
+  _enable_gc = converted_gc_prob > 0;
 
   printf("Engine initialized for %d NUMA node(s) x %d PIM rank(s) (total %d DPUs)\n",
     _num_numa_nodes, _num_ranks_per_numa_node, _num_dpus);

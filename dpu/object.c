@@ -272,7 +272,7 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
       }
       *add_to_write_set = true;
       // Successfully installed new version, try gc before return
-      if (gc_enabled) {
+      if (gc_coin_toss()) {
         gc_lsn_t gc_lsn = gc_get_lsn();
         vid = ver_buf.v.next;
         bool collect = false;

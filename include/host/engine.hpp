@@ -83,7 +83,7 @@ class rank_engine {
     uint32_t num_indexes;
     index_info index_infos[DPU_MAX_NUM_INDEXES];
     rank_buffer::buf_alloc_fn alloc_fn;
-    bool enable_gc;
+    uint32_t gc_prob;
     bool enable_measure_energy;
     bool enable_interleave;
   };
@@ -93,7 +93,7 @@ class rank_engine {
     const char *dpu_binary;
     const char *dpu_args_symbol, *dpu_rets_symbol;
     const char *dpu_num_indexes_symbol, *dpu_index_infos_symbol;
-    const char *dpu_enable_gc_symbol;
+    const char *dpu_gc_prob_symbol;
   };
   rank_engine() {}
   int init(config conf, information info);
@@ -190,8 +190,8 @@ class engine {
     // allocation function for PIM buffers.
     // if nullptr, use default malloc.
     rank_buffer::buf_alloc_fn alloc_fn;
-    // Enable garbage collection?
-    bool enable_gc;
+    // Garbage collection probability on each update query
+    double gc_prob;
     // Enable energy measurement?
     bool enable_measure_energy;
     // Enable interleaving?

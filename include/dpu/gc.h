@@ -18,6 +18,12 @@ void gc_init_global();
 extern bool gc_enabled;
 
 /**
+ * Coin toss to determine whether we should do GC.
+ * @return whether we should do GC in this call.
+ */
+bool gc_coin_toss();
+
+/**
  * Update the gc lsn.
  * @param gc_lsn new gc_lsn.
  */

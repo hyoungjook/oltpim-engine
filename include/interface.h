@@ -21,7 +21,8 @@ typedef struct _index_info {
 static_assert((sizeof(index_info) * DPU_MAX_NUM_INDEXES) % 8 == 0, "");
 
 // Global configuration
-#define DPU_ENABLE_GC_SYMBOL global_enable_gc_
+#define DPU_GC_PROB_SYMBOL    global_gc_prob_
+#define DPU_GC_PROB_BASE      128
 
 /**
  * Status codes

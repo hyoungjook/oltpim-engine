@@ -141,7 +141,7 @@ int main(int argc, char *argv[]) {
   engine.init(oltpim::engine::config{
     .num_ranks_per_numa_node = num_ranks_per_numa_node,
     .alloc_fn = nullptr,
-    .enable_gc = false,
+    .gc_prob = 0.0,
     .enable_measure_energy = false,
     .enable_interleave = true
   });
