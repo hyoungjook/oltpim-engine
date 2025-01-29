@@ -58,7 +58,7 @@ static void ws_pool_init_global() {
 
 static ws_node_id_t ws_node_alloc() {
   mutex_lock(ws_alloc_mutex);
-  assert_print(ws_free_list_head != ws_node_id_null); // OOM
+  assert(ws_free_list_head != ws_node_id_null); // OOM
   ws_node_id_t new_free_list_head = ws_pool_read_freeptr(ws_free_list_head);
   ws_node_id_t new_id = ws_free_list_head;
   ws_free_list_head = new_free_list_head;

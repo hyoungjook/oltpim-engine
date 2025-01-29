@@ -551,7 +551,7 @@ bool engine::is_done(request_base *req) {
 }
 
 void engine::update_gc_lsn(uint64_t gc_lsn) {
-  assert(_enable_gc);
+  if (!_enable_gc) return;
   for (auto &re: _rank_engines) {
     *(volatile uint64_t*)&re->_recent_gc_lsn = gc_lsn;
   }

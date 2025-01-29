@@ -81,7 +81,7 @@ static void ver_pool_write_freeptr(version_id_t vid, version_id_t ptr) {
 // Should manually mark freeptr.meta.is_free=0 after this
 static __noinline version_id_t version_alloc() {
   mutex_lock(ver_alloc_mutex);
-  assert_print(ver_free_list_head != ver_free_list_tail); // OOM
+  assert(ver_free_list_head != ver_free_list_tail); // OOM
   version_id_t new_free_list_head = ver_pool_read_freeptr(ver_free_list_head);
   version_id_t new_vid = ver_free_list_head;
   ver_free_list_head = new_free_list_head;
@@ -158,7 +158,7 @@ oid_t object_create_acquire(xid_t xid, object_value_t new_value, bool primary) {
 }
 
 void object_cancel_create(oid_t oid) {
-  assert_print(!IS_SECONDARY_OID(oid));
+  assert(!IS_SECONDARY_OID(oid));
   version_id_t vid = oid_get(oid);
   version_free(vid);
   oid_free(oid);
@@ -210,7 +210,7 @@ bool object_read(oid_t oid, xid_t xid, csn_t csn, object_value_t *value) {
 status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value,
     object_value_t *old_value, bool remove, bool maybe_null, bool *add_to_write_set,
     object_value_t *gc_begin, uint16_t *gc_num) {
-  assert_print(!IS_SECONDARY_OID(oid));
+  assert(!IS_SECONDARY_OID(oid));
   __dma_aligned version_t ver_buf;
   // get the vid
   version_id_t vid;
@@ -318,10 +318,10 @@ void object_finalize(oid_t oid, xid_t xid, csn_t csn, bool commit) {
   version_id_t vid;
   if (!IS_SECONDARY_OID(oid)) { // primary
     vid = oid_get(oid);
-    assert_print(vid != version_id_null);
+    assert(vid != version_id_null);
     version_read(vid, &ver_buf);
-    assert_print(!ver_buf.v.meta.is_free_slot);
-    assert_print(ver_buf.v.meta.dirty && ver_buf.v.csn == xid);
+    assert(!ver_buf.v.meta.is_free_slot);
+    assert(ver_buf.v.meta.dirty && ver_buf.v.csn == xid);
     if (commit) {
       // expose the dirty head
       ver_buf.v.csn = csn;
@@ -337,8 +337,8 @@ void object_finalize(oid_t oid, xid_t xid, csn_t csn, bool commit) {
   else {
     vid = SECONDARY_OID_TO_VID(oid);
     version_read(vid, &ver_buf);
-    assert_print(!ver_buf.s.meta.is_free_slot);
-    assert_print(ver_buf.s.meta.dirty && ver_buf.s.begin_csn == xid);
+    assert(!ver_buf.s.meta.is_free_slot);
+    assert(ver_buf.s.meta.dirty && ver_buf.s.begin_csn == xid);
     if (commit) {
       ver_buf.s.begin_csn = csn;
       ver_buf.s.meta.dirty = false;

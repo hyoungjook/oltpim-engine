@@ -12,6 +12,8 @@
 #define UPMEM_USE_DIRECT_LAUNCH
 #endif
 
+#define UPMEM_SKIP_FAULT_ON_RELEASE
+
 extern "C" {
 /* Includes from UPMEM Host APIs and Low-Level APIs */
 #include <dpu.h>
@@ -654,7 +656,7 @@ namespace launch {
   dpu_bitfield_t poll_running[DPU_MAX_NR_CIS];
   UPMEM_DIRECT_ASSERT(ufi_select_all(rank, &ci_mask));
   internal::ufi::read_dpu_run(rank, ci_mask, poll_running);
-#ifndef NDEBUG
+#if !(defined(NDEBUG) && defined(UPMEM_SKIP_FAULT_ON_RELEASE))
   dpu_bitfield_t poll_fault[DPU_MAX_NR_CIS];
   internal::ufi::read_dpu_fault(rank, ci_mask, poll_fault);
 #endif
@@ -663,7 +665,7 @@ namespace launch {
   *fault = false;
   for (uint8_t each_ci = 0; each_ci < nr_cis; ++each_ci) {
     dpu_selected_mask_t mask_all = rank->runtime.control_interface.slice_info[each_ci].enabled_dpus;
-#ifndef NDEBUG
+#if !(defined(NDEBUG) && defined(UPMEM_SKIP_FAULT_ON_RELEASE))
     dpu_bitfield_t ci_fault = poll_fault[each_ci] & mask_all;
 #else
     const dpu_bitfield_t ci_fault = 0;
@@ -672,7 +674,7 @@ namespace launch {
     *done = *done && (ci_running == 0);
     *fault = *fault || (ci_fault != 0);
   }
-#else
+#else // !defined(UPMEM_USE_DIRECT_LAUNCH)
   DPU_ASSERT(dpu_poll_rank(rank));
   DPU_ASSERT(dpu_status_rank(rank, done, fault));
 #endif

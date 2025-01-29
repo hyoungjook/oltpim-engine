@@ -84,7 +84,7 @@ int main() {
       mutex_lock(args_mutex);
       // Check priority barrier
       if (curr_priority < priority_frontier) {
-        assert_print(curr_priority + 1 == priority_frontier);
+        assert(curr_priority + 1 == priority_frontier);
         curr_priority = priority_frontier;
         mutex_unlock(args_mutex);
         barrier_wait(&main_barrier);
@@ -127,7 +127,7 @@ int main() {
     #define case_fetch_arg(name) \
     args_read_content(&arg, marg, args_reader_cache, modulo, request_arg_size);
     REQUEST_SWITCH_CASE(request_type, case_fetch_arg,
-      assert_print(false);
+      assert(false);
     )
     #undef case_fetch_arg
 
@@ -135,6 +135,6 @@ int main() {
     process_request(request_type, &arg, mret);
   }
 
-  assert_print(priority_frontier == NUM_PRIORITIES - 1);
+  assert(priority_frontier == NUM_PRIORITIES - 1);
   return 0;
 }

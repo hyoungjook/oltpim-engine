@@ -47,7 +47,7 @@ static_assert(sizeof(btree_val_t) == sizeof(oid_t), "");
 static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets) {
   const uint8_t index_id = args->xid_s.index_id;
   const uint64_t xid = args->xid_s.xid;
-  assert_print(index_id < NUM_INDEXES);
+  assert(index_id < NUM_INDEXES);
   __dma_aligned rets_insert_t rets;
   rets.gc_num = 0;
   status_t status = STATUS_FAILED;
@@ -59,7 +59,7 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
   btree_val_t old_oid = btree_insert(index_trees[index_id], args->key, oid);
   if (old_oid != BTREE_NOVAL) {
     // key already exists
-    assert_print(INDEX_INFOS[index_id].primary);
+    assert(INDEX_INFOS[index_id].primary);
     object_cancel_create(oid);
     oid = old_oid;
     if (!object_read(oid, xid, args->csn, NULL)) {
@@ -87,13 +87,13 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
 
 static inline void process_get(args_get_t *args, __mram_ptr uint8_t *mrets) {
   const uint8_t index_id = args->xid_s.index_id;
-  assert_print(index_id < NUM_INDEXES);
+  assert(index_id < NUM_INDEXES);
   __dma_aligned rets_get_t rets;
   status_t status = STATUS_FAILED;
   // query btree
   oid_t oid;
   if (args->xid_s.oid_query) {
-    assert_print(INDEX_INFOS[index_id].primary);
+    assert(INDEX_INFOS[index_id].primary);
     oid = (oid_t)args->key;
   }
   else {
@@ -114,8 +114,8 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   // update without returning old_value. the rest is the same with updatermw.
   const uint8_t index_id = args->xid_s.index_id;
   const uint64_t xid = args->xid_s.xid;
-  assert_print(index_id < NUM_INDEXES);
-  assert_print(INDEX_INFOS[index_id].primary);
+  assert(index_id < NUM_INDEXES);
+  assert(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_update_t rets;
   rets.gc_num = 0;
   status_t status = STATUS_FAILED;
@@ -140,8 +140,8 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   // update with returning old_value. the rest is the same with update.
   const uint8_t index_id = args->xid_s.index_id;
   const uint64_t xid = args->xid_s.xid;
-  assert_print(index_id < NUM_INDEXES);
-  assert_print(INDEX_INFOS[index_id].primary);
+  assert(index_id < NUM_INDEXES);
+  assert(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_updatermw_t rets;
   status_t status = STATUS_FAILED;
   bool add_to_write_set = false;
@@ -163,8 +163,8 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
 static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets) {
   const uint8_t index_id = args->xid_s.index_id;
   const uint64_t xid = args->xid_s.xid;
-  assert_print(index_id < NUM_INDEXES);
-  assert_print(INDEX_INFOS[index_id].primary);
+  assert(index_id < NUM_INDEXES);
+  assert(INDEX_INFOS[index_id].primary);
   __dma_aligned rets_remove_t rets;
   rets.gc_num = 0;
   status_t status = STATUS_FAILED;
@@ -209,8 +209,8 @@ static bool scan_callback(oid_t oid, void *args) {
 
 static inline void process_scan(args_scan_t *args, __mram_ptr uint8_t *mrets) {
   const uint8_t index_id = args->xid_s.index_id;
-  assert_print(index_id < NUM_INDEXES);
-  assert_print(args->keys[0] <= args->keys[1]);
+  assert(index_id < NUM_INDEXES);
+  assert(args->keys[0] <= args->keys[1]);
   scan_callback_args scan_args;
   scan_args.xid = args->xid_s.xid;
   scan_args.csn = args->csn;

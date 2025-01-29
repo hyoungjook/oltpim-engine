@@ -42,7 +42,7 @@ bool gc_coin_toss() {
 }
 
 void gc_update_lsn(gc_lsn_t new_gc_lsn) {
-  assert_print(gc_enabled);
+  assert(gc_enabled);
   mutex_lock(gc_lsn_mutex);
   if (gc_lsn < new_gc_lsn) {
     gc_lsn = new_gc_lsn;

@@ -59,7 +59,7 @@ static node_id_t node_alloc_next;
 
 static __noinline node_id_t node_alloc() {
   mutex_lock(node_alloc_mutex);
-  assert_print(node_alloc_next < BTREE_ALLOCATOR_SIZE);
+  assert(node_alloc_next < BTREE_ALLOCATOR_SIZE); // OOM
   node_id_t node_id = node_alloc_next;
   ++node_alloc_next;
   mutex_unlock(node_alloc_mutex);
@@ -292,7 +292,7 @@ btree_val_t btree_insert(btree_t bt, btree_key_t key, btree_val_t val) {
     node_lock(node_id);
   }
   const int16_t max_depth = depth;
-  assert_print(max_depth < BT_MAX_DEPTH);
+  assert(max_depth < BT_MAX_DEPTH);
 
   // Insert to leaf
   if (!allow_duplicates && slot < node_buf.num_keys && node_buf.keys[slot] == key) {
