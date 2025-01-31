@@ -32,5 +32,6 @@ using request_insertonly = request<request_type_insertonly, args_insertonly_t, r
 using request_getonly = request<request_type_getonly, args_getonly_t, rets_getonly_t>;
 static_assert(sizeof(request_insert) >= sizeof(request_insertonly), "");
 static_assert(sizeof(request_get) >= sizeof(request_getonly), "");
+static_assert(sizeof(request_update) >= sizeof(request_getonly) + sizeof(void*), "");
 
 }
