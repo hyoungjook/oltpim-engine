@@ -127,7 +127,7 @@ int main() {
     #define case_fetch_arg(name) \
     args_read_content(&arg, marg, args_reader_cache, modulo, request_arg_size);
     REQUEST_SWITCH_CASE(request_type, case_fetch_arg,
-      assert(false);
+      always_assert(false);
     )
     #undef case_fetch_arg
 

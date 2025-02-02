@@ -113,7 +113,7 @@ void rank_buffer::finalize_args() {
   max_rlength = 0;
   for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
     uint32_t offset = offsets[each_dpu];
-    OLTPIM_ASSERT(offset < DPU_BUFFER_SIZE);
+    if (__builtin_expect(offset >= DPU_BUFFER_SIZE, 0)) abort();
     // Store offset to the beginning of the buffer
     *(uint32_t*)bufs[each_dpu] = offset;
     // Compute max offsets

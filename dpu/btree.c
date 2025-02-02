@@ -19,8 +19,7 @@
 __mram_noinit uint64_t do_nothing_buf;
 void check_do_nothing_buf() {
   const uint32_t addr = (uint32_t)&do_nothing_buf;
-  assert(addr == 0x0);
-  (void)addr;
+  always_assert(addr == 0x0);
 }
 
 /* Configs */
@@ -59,7 +58,7 @@ static node_id_t node_alloc_next;
 
 static __noinline node_id_t node_alloc() {
   mutex_lock(node_alloc_mutex);
-  assert(node_alloc_next < BTREE_ALLOCATOR_SIZE); // OOM
+  always_assert(node_alloc_next < BTREE_ALLOCATOR_SIZE); // OOM
   node_id_t node_id = node_alloc_next;
   ++node_alloc_next;
   mutex_unlock(node_alloc_mutex);

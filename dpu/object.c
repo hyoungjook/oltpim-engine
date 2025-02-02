@@ -81,7 +81,7 @@ static void ver_pool_write_freeptr(version_id_t vid, version_id_t ptr) {
 // Should manually mark freeptr.meta.is_free=0 after this
 static __noinline version_id_t version_alloc() {
   mutex_lock(ver_alloc_mutex);
-  assert(ver_free_list_head != ver_free_list_tail); // OOM
+  always_assert(ver_free_list_head != ver_free_list_tail); // OOM
   version_id_t new_free_list_head = ver_pool_read_freeptr(ver_free_list_head);
   version_id_t new_vid = ver_free_list_head;
   ver_free_list_head = new_free_list_head;

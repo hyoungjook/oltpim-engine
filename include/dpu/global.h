@@ -8,6 +8,14 @@
 #define NR_TASKLETS 8
 #endif
 
+/* Helpers */
+#define always_assert(expression)    \
+do {                                 \
+    if (!(expression)) {             \
+        __asm__ volatile("fault 3"); \
+    }                                \
+} while (0)
+
 /** 
  * Some functions should not be inlined to reduce
  * the IRAM footprint.
