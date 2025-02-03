@@ -32,7 +32,7 @@ typedef uint8_t status_t;
 #define STATUS_FAILED   ((status_t)2)
 #define STATUS_CONFLICT ((status_t)3)
 #define CHECK_VALID_STATUS(status) \
-  assert(((status) >= STATUS_SUCCESS) || \
+  assert(((status) >= STATUS_SUCCESS) && \
          ((status) <= STATUS_CONFLICT))
 
 #define REQ_GET_STATUS(value_status) \
