@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <string.h>
 #include "engine.hpp"
 
 // These should be defined at compile time.
@@ -218,9 +219,9 @@ int rank_engine::init(config conf, information info) {
   _enable_measure_energy = conf.enable_measure_energy;
   _entered_measurement = false;
   _core_dump_sampled = false;
-  _avg_pim_time_us = 0;
-  _pim_time_t0 = 0;
-  _rank_util = 0;
+  //_avg_pim_time_us = 0;
+  //_pim_time_t0 = 0;
+  //_rank_util = 0;
 
   // Interleave
   _enable_interleave = conf.enable_interleave;
@@ -240,7 +241,7 @@ bool rank_engine::_process_phase_0() {
   // Construct buffer & saved_requests (linked list of all requests)
   _saved_requests = nullptr;
   request_base *last_req = nullptr;
-  bool something_exists = false;
+  uint32_t num_reqs = 0;
   assert(
     (!_process_collect_only_numa_local_requests) ||
     (my_numa_id == _rank.numa_node())
@@ -253,16 +254,17 @@ bool rank_engine::_process_phase_0() {
         continue;
       }
       request_base *req = _request_lists_per_numa[each_node][priority].move();
-      if (req && !something_exists) {
+      if (req && num_reqs == 0) {
         // lazy buffer initialization
-        something_exists = true;
         _buffer.reset_offsets(true);
         for (int p = 0; p < priority; ++p) {
           _buffer.push_priority_separator();
         }
+        // num_reqs will be incremented just below
       }
       while (req) {
         assert(req->rank_id == (uint16_t)_rank_id);
+        ++num_reqs;
         // target of the current iteration: *req
         // push req to buffer
         _buffer.push_args(req);
@@ -292,11 +294,11 @@ bool rank_engine::_process_phase_0() {
       }
     }
     // Insert separator
-    if (something_exists && (priority < num_priorities - 1)) {
+    if (num_reqs > 0 && (priority < num_priorities - 1)) {
       _buffer.push_priority_separator();
     }
   }
-  if (something_exists) {
+  if (num_reqs > 0) {
     // Finalize buffers
     if (_enable_gc) {
       uint64_t recent_gc_lsn = *(volatile uint64_t*)&_recent_gc_lsn;
@@ -308,9 +310,19 @@ bool rank_engine::_process_phase_0() {
     _buffer.finalize_args();
     // Copy args to rank
     _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
-    try_sample_dpu_profiling();
+    //try_sample_dpu_profiling();
+    #ifdef MEASURE_PIM_STATS
+    if (_entered_measurement) {
+      uint64_t t0 = cur_us();
+      _rank.switch_mux(false);
+      _stats.t1 = cur_us();
+      _stats.mux_time_total_us += (_stats.t1 - t0);
+      _stats.num_total_reqs += num_reqs;
+      ++_stats.num_total_rounds;
+    }
+    #endif
   }
-  return something_exists;
+  return num_reqs > 0;
 }
 
 bool rank_engine::_process_phase_1() {
@@ -329,9 +341,17 @@ bool rank_engine::_process_phase_1() {
   }
   if (pim_done) {
     //_rank.log_read(stdout); // debug
-    if (_entered_measurement) {
-      _avg_pim_time_us += (double)(cur_us() - _pim_time_t0) * _rank_util;
+    //if (_entered_measurement) {
+    //  _avg_pim_time_us += (double)(cur_us() - _pim_time_t0) * _rank_util;
+    //}
+    #ifdef MEASURE_PIM_STATS
+    if (_entered_measurement && _stats.t1 != (uint64_t)-1) {
+      uint64_t t2 = cur_us();
+      _stats.pim_time_total_us += (t2 - _stats.t1);
+      _rank.switch_mux(true);
+      _stats.mux_time_total_us += (cur_us() - t2);
     }
+    #endif
 
     // Copy rets from rank
     _rank.copy(dpu_rets_transfer_id, _buffer.max_rlength, false);
@@ -382,7 +402,7 @@ void rank_engine::print_log(int dpu_id) {
   _rank.log_read(stdout, false, dpu_id);
 }
 
-#define SAMPLE_DPU_CORE_DUMP_FILE "/tmp/sample_dpu_core_dump"
+/*#define SAMPLE_DPU_CORE_DUMP_FILE "/tmp/sample_dpu_core_dump"
 
 void rank_engine::try_sample_dpu_profiling() {
   if (!_entered_measurement) return;
@@ -413,12 +433,10 @@ void rank_engine::try_sample_dpu_profiling() {
 
   // record pim time
   _pim_time_t0 = cur_us();
-}
+}*/
 
-void rank_engine::start_measure_pim_time() {
-  if (_enable_measure_energy) {
-    _entered_measurement = true;
-  }
+void rank_engine::start_measure_pim_stats() {
+  _entered_measurement = true;
 }
 
 engine engine::g_engine;
@@ -588,11 +606,10 @@ rank_engine::stats engine::get_stats() {
 }
 
 void engine::start_measurement() {
-  // Used to estimate pim energy
-  for (auto &re: _rank_engines) re->start_measure_pim_time();
+  for (auto &re: _rank_engines) re->start_measure_pim_stats();
 }
 
-void engine::compute_dpu_stats(double elapsed_sec,
+/*void engine::compute_dpu_stats(double elapsed_sec,
     double &pim_util, double &wram_ratio, double &mram_ratio, double &mram_avg_size) {
   if (!_rank_engines[0]->_core_dump_sampled) {
     fprintf(stderr, "Core Dump is not sampled! Try reducing min_offset in oltpim::rank_engine::try_sample_dpu_profiling().\n");
@@ -626,6 +643,24 @@ void engine::compute_dpu_stats(double elapsed_sec,
   if (fscanf(f, "%lf", &wram_ratio) == EOF) {perror("fscanf"); return;}
   if (fscanf(f, "%lf", &mram_ratio) == EOF) {perror("fscanf"); return;}
   if (fscanf(f, "%lf", &mram_avg_size) == EOF) {perror("fscanf"); return;}
+}*/
+
+engine::pim_stats engine::get_pim_stats() {
+  static constexpr double USEC = 1000000.0;
+  pim_stats stats;
+  memset(&stats, 0, sizeof(stats));
+  uint64_t total_rounds = 0, total_requests = 0;
+  for (auto &re: _rank_engines) {
+    stats.avg_pim_running_time += (double)re->_stats.pim_time_total_us / USEC;
+    stats.avg_mux_switch_time += (double)re->_stats.mux_time_total_us / USEC;
+    total_rounds += re->_stats.num_total_rounds;
+    total_requests += re->_stats.num_total_reqs;
+  }
+  stats.avg_pim_running_time /= _num_ranks;
+  stats.avg_mux_switch_time /= _num_ranks;
+  stats.avg_num_rounds = (double)total_rounds / _num_ranks;
+  stats.avg_requests_per_round = (double)total_requests / total_rounds;
+  return stats;
 }
 
 }

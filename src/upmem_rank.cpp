@@ -201,6 +201,11 @@ void rank::log_read(FILE *stream, bool fault_only, int dpu_id) {
   }
 }
 
+void rank::switch_mux(bool mux_for_host) {
+  // helper, used to measure mux time separately
+  upmem::direct::mux::switch_rank(_rank, mux_for_host);
+}
+
 rank::memory_type rank::fill_transfer_matrix(dpu_transfer_matrix *matrix,
     uint32_t symbol_offset, uint32_t length) {
   // Symbol type

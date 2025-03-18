@@ -27,7 +27,7 @@ class rank {
     bool direction_to_dpu, uint32_t symbol_offset = 0);
 
   void log_read(FILE *stream, bool fault_only = false, int dpu_id = -1);
-
+  void switch_mux(bool mux_for_host);
   inline int num_dpus() {return _num_dpus;}
   inline int numa_node() {return _numa_node;}
 

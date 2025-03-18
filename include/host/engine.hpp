@@ -6,6 +6,8 @@
 #include "upmem_rank.hpp"
 #include "interface.h"
 
+// Debug option macros.
+//#define MEASURE_PIM_STATS
 namespace oltpim {
 
 struct request_base {
@@ -142,11 +144,18 @@ class rank_engine {
   bool _enable_measure_energy;
   bool _entered_measurement;
   bool _core_dump_sampled;
-  double _avg_pim_time_us; // sum of (pim_time * rank_util)
-  uint64_t _pim_time_t0;
-  float _rank_util;
-  inline void try_sample_dpu_profiling();
-  void start_measure_pim_time();
+  //double _avg_pim_time_us; // sum of (pim_time * rank_util)
+  //uint64_t _pim_time_t0;
+  //float _rank_util;
+  //inline void try_sample_dpu_profiling();
+  void start_measure_pim_stats();
+  struct pim_stats {
+    uint64_t t1 = (uint64_t)-1;
+    uint64_t pim_time_total_us = 0;
+    uint64_t mux_time_total_us = 0;
+    uint64_t num_total_reqs = 0;
+    uint32_t num_total_rounds = 0;
+  } _stats;
 
   // interleave
   bool _enable_interleave;
@@ -222,8 +231,15 @@ class engine {
   rank_engine::stats get_stats();
 
   void start_measurement();
-  void compute_dpu_stats(double elapsed_sec,
-    double &pim_util, double &wram_ratio, double &mram_ratio, double &mram_avg_size);
+  //void compute_dpu_stats(double elapsed_sec,
+  //  double &pim_util, double &wram_ratio, double &mram_ratio, double &mram_avg_size);
+  struct pim_stats {
+    double avg_pim_running_time;
+    double avg_mux_switch_time;
+    double avg_num_rounds;
+    double avg_requests_per_round;
+  };
+  pim_stats get_pim_stats();
 
  private:
   engine();
