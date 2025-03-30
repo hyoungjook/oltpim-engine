@@ -19,12 +19,6 @@
 
 namespace oltpim {
 
-uint64_t cur_us() {
-  struct timeval tv;
-  gettimeofday(&tv, 0);
-  return ((uint64_t)tv.tv_sec) * 1000000 + tv.tv_usec;
-}
-
 // physical core id
 static thread_local int my_numa_id = -1;
 
@@ -218,10 +212,6 @@ int rank_engine::init(config conf, information info) {
   // Energy
   _enable_measure_energy = conf.enable_measure_energy;
   _entered_measurement = false;
-  _core_dump_sampled = false;
-  //_avg_pim_time_us = 0;
-  //_pim_time_t0 = 0;
-  //_rank_util = 0;
 
   // Interleave
   _enable_interleave = conf.enable_interleave;
@@ -246,6 +236,10 @@ bool rank_engine::_process_phase_0() {
     (!_process_collect_only_numa_local_requests) ||
     (my_numa_id == _rank.numa_node())
   ); // on numa_local_key option, process() should be only called from numa-local thread.
+  #ifdef MEASURE_PIM_STATS
+  uint64_t t0 = 0;
+  if (_entered_measurement) t0 = cur_us();
+  #endif
   for (int priority = 0; priority < num_priorities; ++priority) {
     for (int each_node = 0; each_node < _num_numa_nodes; ++each_node) {
       if (_process_collect_only_numa_local_requests && (each_node != my_numa_id)) {
@@ -308,15 +302,25 @@ bool rank_engine::_process_phase_0() {
       }
     }
     _buffer.finalize_args();
-    // Copy args to rank
-    _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
-    //try_sample_dpu_profiling();
     #ifdef MEASURE_PIM_STATS
     if (_entered_measurement) {
-      uint64_t t0 = cur_us();
+      uint64_t t1 = cur_us();
+      _stats.proc_time_total_us += (t1 - t0);
+      t0 = t1;
+    }
+    #endif
+    // Copy args to rank
+    _rank.copy(dpu_args_transfer_id, _buffer.max_alength, true);
+    #ifdef SAMPLE_DPU_CORE_DUMP
+    try_sample_dpu_core_dump();
+    #endif
+    #ifdef MEASURE_PIM_STATS
+    if (_entered_measurement) {
+      uint64_t t1 = cur_us();
+      _stats.copy_time_total_us += (t1 - t0);
       _rank.switch_mux(false);
-      _stats.t1 = cur_us();
-      _stats.mux_time_total_us += (_stats.t1 - t0);
+      _stats.t2 = cur_us();
+      _stats.mux_time_total_us += (_stats.t2 - t1);
       _stats.num_total_reqs += num_reqs;
       ++_stats.num_total_rounds;
     }
@@ -345,16 +349,26 @@ bool rank_engine::_process_phase_1() {
     //  _avg_pim_time_us += (double)(cur_us() - _pim_time_t0) * _rank_util;
     //}
     #ifdef MEASURE_PIM_STATS
-    if (_entered_measurement && _stats.t1 != (uint64_t)-1) {
-      uint64_t t2 = cur_us();
-      _stats.pim_time_total_us += (t2 - _stats.t1);
+    uint64_t t3 = 0;
+    if (_entered_measurement && _stats.t2 != (uint64_t)-1) {
+      t3 = cur_us();
+      _stats.pim_time_total_us += (t3 - _stats.t2);
       _rank.switch_mux(true);
-      _stats.mux_time_total_us += (cur_us() - t2);
+      uint64_t t4 = cur_us();
+      _stats.mux_time_total_us += (t4 - t3);
+      t3 = t4;
     }
     #endif
 
     // Copy rets from rank
     _rank.copy(dpu_rets_transfer_id, _buffer.max_rlength, false);
+    #ifdef MEASURE_PIM_STATS
+    if (_entered_measurement && _stats.t2 != (uint64_t)-1) {
+      uint64_t t4 = cur_us();
+      _stats.copy_time_total_us += (t4 - t3);
+      t3 = t4;
+    }
+    #endif
 
     // Distribute results: the traversal order should be the same as construction
     _buffer.reset_offsets(false);
@@ -365,6 +379,11 @@ bool rank_engine::_process_phase_1() {
       req->mark_done();
       req = req_next;
     }
+    #ifdef MEASURE_PIM_STATS
+    if (_entered_measurement && _stats.t2 != (uint64_t)-1) {
+      _stats.proc_time_total_us += (cur_us() - t3);
+    }
+    #endif
   }
   return pim_done;
 }
@@ -402,38 +421,25 @@ void rank_engine::print_log(int dpu_id) {
   _rank.log_read(stdout, false, dpu_id);
 }
 
-/*#define SAMPLE_DPU_CORE_DUMP_FILE "/tmp/sample_dpu_core_dump"
+#define SAMPLE_DPU_CORE_DUMP_FILE "/tmp/sample_dpu_core_dump"
 
-void rank_engine::try_sample_dpu_profiling() {
-  if (!_entered_measurement) return;
-  // Statistics for utilization
-  uint32_t max_offset = 0, total_offset = 0;
-  for (int d = 0; d < _buffer._num_dpus; ++d) {
-    if (_buffer.offsets[d] >= max_offset) {
-      max_offset = _buffer.offsets[d];
-    }
-    total_offset += _buffer.offsets[d];
-  }
-  _rank_util = (float)total_offset / max_offset / _buffer._num_dpus;
-
-  // Sample only once, in random
-  if (__builtin_expect(_rank_id == 0 && !_core_dump_sampled, 0)) {
-    // Sample if input has sufficient length
-    static constexpr uint32_t min_offset = 256;
-    if (_buffer.max_alength >= sizeof(uint32_t) + min_offset) {
-      // Core dump
-      int sample_dpu = 0;
-      for (int d = 0; d < _buffer._num_dpus; ++d) {
-        if (_buffer.offsets[d] >= max_offset) sample_dpu = d;
+void rank_engine::try_sample_dpu_core_dump() {
+  if (!(_entered_measurement && _rank_id == 0)) return;
+  // Start with 32, dump the (approx.) longest input dpu for rank 0
+  static uint32_t sampled_max_offset = 32;
+  if (__builtin_expect(_buffer.max_alength > ALIGN8(sizeof(uint32_t) + sampled_max_offset), 0)) {
+    // Core dump
+    uint32_t max_offset = 0, sample_dpu = 0;
+    for (int d = 0; d < _buffer._num_dpus; ++d) {
+      if (_buffer.offsets[d] >= max_offset) {
+        max_offset = _buffer.offsets[d];
+        sample_dpu = d;
       }
-      _rank.core_dump(sample_dpu, SAMPLE_DPU_CORE_DUMP_FILE);
-      _core_dump_sampled = true;
     }
+    sampled_max_offset = max_offset;
+    _rank.core_dump(sample_dpu, SAMPLE_DPU_CORE_DUMP_FILE);
   }
-
-  // record pim time
-  _pim_time_t0 = cur_us();
-}*/
+}
 
 void rank_engine::start_measure_pim_stats() {
   _entered_measurement = true;
@@ -653,11 +659,15 @@ engine::pim_stats engine::get_pim_stats() {
   for (auto &re: _rank_engines) {
     stats.avg_pim_running_time += (double)re->_stats.pim_time_total_us / USEC;
     stats.avg_mux_switch_time += (double)re->_stats.mux_time_total_us / USEC;
+    stats.avg_req_process_time += (double)re->_stats.proc_time_total_us / USEC;
+    stats.avg_req_copy_time += (double)re->_stats.copy_time_total_us / USEC;
     total_rounds += re->_stats.num_total_rounds;
     total_requests += re->_stats.num_total_reqs;
   }
   stats.avg_pim_running_time /= _num_ranks;
   stats.avg_mux_switch_time /= _num_ranks;
+  stats.avg_req_process_time /= _num_ranks;
+  stats.avg_req_copy_time /= _num_ranks;
   stats.avg_num_rounds = (double)total_rounds / _num_ranks;
   stats.avg_requests_per_round = (double)total_requests / total_rounds;
   return stats;

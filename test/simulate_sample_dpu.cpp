@@ -42,20 +42,25 @@ void load_core_dump(const char *dump, dpu_set_t dpu_set) {
 }
 
 int main(int argc, char *argv[]) {
-  if (argc != 4) {
-    printf("usage: %s dpu_binary core_dump trace_dir\n", argv[0]);
+  if (argc < 3) {
+    printf("usage: %s dpu_binary core_dump [trace_dir]\n", argv[0]);
     exit(1);
   }
   const char *dpu_binary = argv[1];
   const char *core_dump = argv[2];
-  const char *trace_dir = argv[3];
+  const char *trace_dir = argc < 4 ? NULL : argv[3];
 
-  // Enable trace
-  setenv("UPMEM_TRACE_DIR", trace_dir, 1);
-
-  // Allocate a functional simulator
   dpu_set_t dpu_set;
-  DPU_ASSERT(dpu_alloc(1, "backend=simulator", &dpu_set));
+  if (trace_dir) {
+    // Enable trace
+    setenv("UPMEM_TRACE_DIR", trace_dir, 1);
+    // Allocate a functional simulator
+    DPU_ASSERT(dpu_alloc(1, "backend=simulator", &dpu_set));
+  }
+  else {
+    // Allocate a default DPU
+    DPU_ASSERT(dpu_alloc(1, NULL, &dpu_set));
+  }
 
   // Load program
   DPU_ASSERT(dpu_load(dpu_set, dpu_binary, NULL));

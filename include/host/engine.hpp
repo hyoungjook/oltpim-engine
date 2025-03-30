@@ -8,6 +8,7 @@
 
 // Debug option macros.
 //#define MEASURE_PIM_STATS
+//#define SAMPLE_DPU_CORE_DUMP
 namespace oltpim {
 
 struct request_base {
@@ -143,16 +144,14 @@ class rank_engine {
   // Sample DPU execution for energy estimation
   bool _enable_measure_energy;
   bool _entered_measurement;
-  bool _core_dump_sampled;
-  //double _avg_pim_time_us; // sum of (pim_time * rank_util)
-  //uint64_t _pim_time_t0;
-  //float _rank_util;
-  //inline void try_sample_dpu_profiling();
+  void try_sample_dpu_core_dump();
   void start_measure_pim_stats();
   struct pim_stats {
-    uint64_t t1 = (uint64_t)-1;
+    uint64_t t2 = (uint64_t)-1;
     uint64_t pim_time_total_us = 0;
     uint64_t mux_time_total_us = 0;
+    uint64_t proc_time_total_us = 0;
+    uint64_t copy_time_total_us = 0;
     uint64_t num_total_reqs = 0;
     uint32_t num_total_rounds = 0;
   } _stats;
@@ -236,6 +235,8 @@ class engine {
   struct pim_stats {
     double avg_pim_running_time;
     double avg_mux_switch_time;
+    double avg_req_process_time;
+    double avg_req_copy_time;
     double avg_num_rounds;
     double avg_requests_per_round;
   };
@@ -260,5 +261,11 @@ class engine {
   int _num_dpus, _num_dpus_per_numa_node;
   inline void pim_id_to_rank_dpu_id(int pim_id, uint16_t &rank_id, uint8_t &dpu_id);
 };
+
+[[maybe_unused]] static uint64_t cur_us() {
+  struct timeval tv;
+  gettimeofday(&tv, 0);
+  return ((uint64_t)tv.tv_sec) * 1000000 + tv.tv_usec;
+}
 
 }
