@@ -673,4 +673,15 @@ engine::pim_stats engine::get_pim_stats() {
   return stats;
 }
 
+void engine::print_sample_dpu_core_dump_info() {
+  printf("Sample DPU core dump is generated in %s. Example command to profile:\n",
+    SAMPLE_DPU_CORE_DUMP_FILE);
+  printf("dpu-profiling dpu-statistics -- %s %s %s\n",
+    "build/oltpim-engine/simulate_sample_dpu",
+    DPU_BINARY,
+    SAMPLE_DPU_CORE_DUMP_FILE);
+  printf("Ensure the DPU binary is compiled with -pg option, in %s.",
+    "oltpim-engine/CMakeLists.txt");
+}
+
 }

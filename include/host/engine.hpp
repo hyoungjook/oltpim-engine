@@ -241,6 +241,7 @@ class engine {
     double avg_requests_per_round;
   };
   pim_stats get_pim_stats();
+  void print_sample_dpu_core_dump_info();
 
  private:
   engine();
