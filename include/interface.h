@@ -69,6 +69,7 @@ _(0, insert, 0,                     \
     uint32_t oid;                   \
     uint16_t gc_num;                \
     uint8_t status;                 \
+    uint8_t add_to_write_set;       \
   , 16, 0, __VA_ARGS__)             \
 _(1, get, 1,                        \
     uint64_t key;                   \
@@ -95,6 +96,7 @@ _(2, update, 1,                     \
     uint32_t oid;                   \
     uint16_t gc_num;                \
     uint8_t status;                 \
+    uint8_t add_to_write_set;       \
   , 24, 0, __VA_ARGS__)             \
 _(3, remove, 1,                     \
     uint64_t key;                   \
@@ -108,6 +110,7 @@ _(3, remove, 1,                     \
     uint32_t oid;                   \
     uint16_t gc_num;                \
     uint8_t status;                 \
+    uint8_t add_to_write_set;       \
   , 16, 0, __VA_ARGS__)             \
 _(4, scan, 1,                       \
     struct {                        \
@@ -123,23 +126,20 @@ _(4, scan, 1,                       \
     uint8_t pad[6];                 \
     uint64_t values[0];             \
   , 8, 8 * (__rn), __VA_ARGS__)     \
-_(5, commit, 0,                     \
+_(5, finalize, 0,                   \
     uint64_t xid;                   \
     uint64_t csn;                   \
-  , 16,                             \
+    uint32_t oid;                   \
+    uint8_t is_commit;              \
+  , 24,                             \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(6, abort, 0,                      \
-    uint64_t xid;                   \
-  , 8,                              \
-    uint64_t pad;                   \
-  , 8, -8, __VA_ARGS__)             \
-_(7, gc, 0,                         \
+_(6, gc, 0,                         \
     uint64_t gc_lsn;                \
   , 8,                              \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
-_(8, insertonly, 0,                 \
+_(7, insertonly, 0,                 \
     uint64_t key;                   \
     uint32_t value;                 \
     uint8_t index_id;               \
@@ -147,7 +147,7 @@ _(8, insertonly, 0,                 \
     uint8_t status;                 \
     uint8_t pad[7];                 \
   , 8, 0, __VA_ARGS__)              \
-_(9, getonly, 1,                    \
+_(8, getonly, 1,                    \
     uint64_t key;                   \
     uint8_t index_id;               \
   , 16,                             \

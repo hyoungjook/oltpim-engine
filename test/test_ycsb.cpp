@@ -178,6 +178,10 @@ int main(int argc, char *argv[]) {
   auto get_new_xid = [&]() {return g_xid.fetch_add(1);};
   auto get_begin_csn = [&]() {return g_csn.load();};
   auto get_end_csn = [&]() {return g_csn.fetch_add(1);};
+  struct write_set_entry {
+    int pim_id;
+    uint32_t oid;
+  };
 
   // init txn
   constexpr uint64_t keys_per_txn = 10;
@@ -200,7 +204,8 @@ int main(int argc, char *argv[]) {
       // begin
       uint64_t xid = get_new_xid();
       uint64_t begin_csn = get_begin_csn();
-      std::set<int> touched_pims;
+      std::vector<write_set_entry> write_set;
+      write_set.reserve(keys_per_txn);
 
       // batch insert
       {
@@ -214,33 +219,36 @@ int main(int argc, char *argv[]) {
           arg.xid_s.index_id = 0;
           arg.csn = begin_csn;
           int pim_id = key_to_pim(key);
-          touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[k]);
         }
         for (uint64_t k = 0; k < num_keys; ++k) {
           while (!engine.is_done(&reqs[k])) {
             co_await std::suspend_always{};
           }
-        }
-
-        for (uint64_t k = 0; k < num_keys; ++k) {
-          assert(reqs[k].rets.status == STATUS_SUCCESS);
+          auto &ret = reqs[k].rets;
+          assert(ret.status == STATUS_SUCCESS);
+          if (ret.status == STATUS_SUCCESS && ret.add_to_write_set) {
+            write_set.push_back(write_set_entry{
+              .pim_id = key_to_pim(reqs[k].args.key),
+              .oid = ret.oid
+            });
+          }
         }
       }
 
       // commit
       {
-        oltpim::request_commit reqs[keys_per_txn];
+        oltpim::request_finalize reqs[keys_per_txn];
         uint64_t end_csn = get_end_csn();
-        int cnt = 0;
-        for (int pim_id: touched_pims) {
-          auto &arg = reqs[cnt].args;
+        for (uint64_t i = 0; i < write_set.size(); ++i) {
+          auto &arg = reqs[i].args;
           arg.xid = xid;
           arg.csn = end_csn;
-          engine.push(pim_id, &reqs[cnt]);
-          ++cnt;
+          arg.oid = write_set[i].oid;
+          arg.is_commit = 1;
+          engine.push(write_set[i].pim_id, &reqs[i]);
         }
-        for (int i = 0; i < cnt; ++i) {
+        for (uint64_t i = 0; i < write_set.size(); ++i) {
           while (!engine.is_done(&reqs[i])) {
             co_await std::suspend_always{};
           }
@@ -256,7 +264,6 @@ int main(int argc, char *argv[]) {
       // begin
       uint64_t xid = get_new_xid();
       uint64_t begin_csn = get_begin_csn();
-      std::set<int> touched_pims;
 
       // batch get
       {
@@ -270,37 +277,14 @@ int main(int argc, char *argv[]) {
           arg.xid_s.oid_query = 0;
           arg.csn = begin_csn;
           int pim_id = key_to_pim(key);
-          touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[k]);
         }
         for (uint64_t k = 0; k < num_keys; ++k) {
           while (!engine.is_done(&reqs[k])) {
             co_await std::suspend_always{};
           }
-        }
-
-        for (uint64_t k = 0; k < num_keys; ++k) {
           assert(REQ_GET_STATUS(reqs[k].rets.value_status) == STATUS_SUCCESS);
           assert(reqs[k].rets.value_status == reqs[k].args.key + 7);
-        }
-      }
-
-      // commit
-      {
-        oltpim::request_commit reqs[keys_per_txn];
-        uint64_t end_csn = get_end_csn();
-        int cnt = 0;
-        for (int pim_id: touched_pims) {
-          auto &arg = reqs[cnt].args;
-          arg.xid = xid;
-          arg.csn = end_csn;
-          engine.push(pim_id, &reqs[cnt]);
-          ++cnt;
-        }
-        for (int i = 0; i < cnt; ++i) {
-          while (!engine.is_done(&reqs[i])) {
-            co_await std::suspend_always{};
-          }
         }
       }
 
@@ -371,7 +355,8 @@ int main(int argc, char *argv[]) {
       // begin
       uint64_t xid = get_new_xid();
       uint64_t begin_csn = get_begin_csn();
-      std::set<int> touched_pims;
+      std::vector<write_set_entry> write_set;
+      write_set.reserve(tests_per_txn);
       int status = STATUS_SUCCESS;
       
       if (txn_type == txn_type_read) {
@@ -385,7 +370,6 @@ int main(int argc, char *argv[]) {
           arg.xid_s.oid_query = 0;
           arg.csn = begin_csn;
           int pim_id = key_to_pim(key);
-          touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[i]);
         }
         for (int i = 0; i < tests_per_txn; ++i) {
@@ -423,22 +407,25 @@ int main(int argc, char *argv[]) {
           uint64_t key = rand_key_distr(rg);
           auto &arg = reqs[i].args;
           arg.key = key;
+          arg.new_value = key + 77;
           arg.xid_s.xid = xid;
           arg.xid_s.index_id = 0;
           arg.csn = begin_csn;
-          arg.new_value = key + 77;
           int pim_id = key_to_pim(key);
-          touched_pims.insert(pim_id);
           engine.push(pim_id, &reqs[i]);
         }
         for (int i = 0; i < tests_per_txn; ++i) {
           while (!engine.is_done(&reqs[i])) {
             co_await std::suspend_always{};
           }
-        }
-        for (int i = 0; i < tests_per_txn; ++i) {
           uint64_t key = reqs[i].args.key;
           auto &ret = reqs[i].rets;
+          if (ret.status == STATUS_SUCCESS && ret.add_to_write_set) {
+            write_set.push_back(write_set_entry{
+              .pim_id = key_to_pim(reqs[i].args.key),
+              .oid = ret.oid
+            });
+          }
 
           // check
           if (key <= (uint64_t)table_size) {
@@ -458,33 +445,18 @@ int main(int argc, char *argv[]) {
       }
 
       // commit/abort
-      if (status == STATUS_SUCCESS) {
-        oltpim::request_commit reqs[tests_per_txn];
-        int cnt = 0;
+      {
+        oltpim::request_finalize reqs[tests_per_txn];
         uint64_t end_csn = get_end_csn();
-        for (int pim_id: touched_pims) {
-          auto &arg = reqs[cnt].args;
+        for (uint64_t i = 0; i < write_set.size(); ++i) {
+          auto &arg = reqs[i].args;
           arg.xid = xid;
           arg.csn = end_csn;
-          engine.push(pim_id, &reqs[cnt]);
-          ++cnt;
+          arg.oid = write_set[i].oid;
+          arg.is_commit = (status == STATUS_SUCCESS) ? 1 : 0;
+          engine.push(write_set[i].pim_id, &reqs[i]);
         }
-        for (int i = 0; i < cnt; ++i) {
-          while (!engine.is_done(&reqs[i])) {
-            co_await std::suspend_always{};
-          }
-        }
-      }
-      else {
-        oltpim::request_abort reqs[tests_per_txn];
-        int cnt = 0;
-        for (int pim_id: touched_pims) {
-          auto &arg = reqs[cnt].args;
-          arg.xid = xid;
-          engine.push(pim_id, &reqs[cnt]);
-          ++cnt;
-        }
-        for (int i = 0; i < cnt; ++i) {
+        for (uint64_t i = 0; i < write_set.size(); ++i) {
           while (!engine.is_done(&reqs[i])) {
             co_await std::suspend_always{};
           }

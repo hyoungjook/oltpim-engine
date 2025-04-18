@@ -5,7 +5,6 @@
 #include "requests.h"
 #include "btree.h"
 #include "object.h"
-#include "wset.h"
 #include "global.h"
 #include "gc.h"
 
@@ -24,7 +23,6 @@ void process_init_global() {
     btree_init(&index_trees[index_id], allow_duplicates);
   }
   object_init_global();
-  wset_init_global();
   gc_init_global();
 }
 
@@ -76,12 +74,10 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
     // insert succeed
     status = STATUS_SUCCESS;
   }
-  if (status == STATUS_SUCCESS && add_to_write_set) {
-    wset_add(xid, oid);
-  }
   // return
   rets.oid = oid;
   rets.status = status;
+  rets.add_to_write_set = (status == STATUS_SUCCESS && add_to_write_set);
   mram_write(&rets, mrets, sizeof(rets_insert_t));
 }
 
@@ -127,38 +123,12 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
       &rets.old_value, false, false, &add_to_write_set,
       &rets.gc_begin, &rets.gc_num);
   }
-  if (status == STATUS_SUCCESS && add_to_write_set) {
-    wset_add(xid, oid);
-  }
   // return
   rets.oid = oid;
   rets.status = status;
+  rets.add_to_write_set = (status == STATUS_SUCCESS && add_to_write_set);
   mram_write(&rets, mrets, sizeof(rets_update_t));
 }
-
-/*static inline void process_updatermw(args_updatermw_t *args, __mram_ptr uint8_t *mrets) {
-  // update with returning old_value. the rest is the same with update.
-  const uint8_t index_id = args->xid_s.index_id;
-  const uint64_t xid = args->xid_s.xid;
-  assert(index_id < NUM_INDEXES);
-  assert(INDEX_INFOS[index_id].primary);
-  __dma_aligned rets_updatermw_t rets;
-  status_t status = STATUS_FAILED;
-  bool add_to_write_set = false;
-  // query btree
-  oid_t oid = btree_get(index_trees[index_id], args->key);
-  if (oid != BTREE_NOVAL) {
-    status = object_update(oid, xid, args->csn, args->new_value,
-      &rets.old_value, false, false, &add_to_write_set);
-  }
-  if (status == STATUS_SUCCESS && add_to_write_set) {
-    wset_add(xid, oid);
-  }
-  // return
-  rets.oid = oid;
-  rets.status = status;
-  mram_write(&rets, mrets, sizeof(rets_updatermw_t));
-}*/
 
 static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets) {
   const uint8_t index_id = args->xid_s.index_id;
@@ -175,12 +145,10 @@ static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets
     status = object_update(oid, xid, args->csn, 0, NULL, true, false, &add_to_write_set,
       &rets.gc_begin, &rets.gc_num);
   }
-  if (status == STATUS_SUCCESS && add_to_write_set) {
-    wset_add(xid, oid);
-  }
   // return
   rets.oid = oid;
   rets.status = status;
+  rets.add_to_write_set = (status == STATUS_SUCCESS && add_to_write_set);
   mram_write(&rets, mrets, sizeof(rets_remove_t));
 }
 
@@ -226,30 +194,8 @@ static inline void process_scan(args_scan_t *args, __mram_ptr uint8_t *mrets) {
   mram_write(&rets, mrets, sizeof(rets_scan_t));
 }
 
-typedef struct _finalize_arg {
-  xid_t xid;
-  csn_t csn;
-  bool commit;
-} finalize_arg;
-static void finalize_callback(oid_t oid, void *arg) {
-  finalize_arg *a = (finalize_arg*)arg;
-  object_finalize(oid, a->xid, a->csn, a->commit);
-}
-
-static inline void process_commit(args_commit_t *args, __mram_ptr uint8_t *_) {
-  finalize_arg arg;
-  arg.xid = args->xid;
-  arg.csn = args->csn;
-  arg.commit = true;
-  wset_traverse_remove(args->xid, finalize_callback, &arg);
-}
-
-static inline void process_abort(args_abort_t *args, __mram_ptr uint8_t *_) {
-  finalize_arg arg;
-  arg.xid = args->xid;
-  // csn not used
-  arg.commit = false;
-  wset_traverse_remove(args->xid, finalize_callback, &arg);
+static inline void process_finalize(args_finalize_t *args, __mram_ptr uint8_t *_) {
+  object_finalize(args->oid, args->xid, args->csn, args->is_commit != 0);
 }
 
 static inline void process_gc(args_gc_t *args, __mram_ptr uint8_t *_) {
