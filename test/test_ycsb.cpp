@@ -242,7 +242,7 @@ int main(int argc, char *argv[]) {
         uint64_t end_csn = get_end_csn();
         for (uint64_t i = 0; i < write_set.size(); ++i) {
           auto &arg = reqs[i].args;
-          arg.xid = xid;
+          //arg.xid = xid;
           arg.csn = end_csn;
           arg.oid = write_set[i].oid;
           arg.is_commit = 1;
@@ -450,7 +450,7 @@ int main(int argc, char *argv[]) {
         uint64_t end_csn = get_end_csn();
         for (uint64_t i = 0; i < write_set.size(); ++i) {
           auto &arg = reqs[i].args;
-          arg.xid = xid;
+          //arg.xid = xid;
           arg.csn = end_csn;
           arg.oid = write_set[i].oid;
           arg.is_commit = (status == STATUS_SUCCESS) ? 1 : 0;

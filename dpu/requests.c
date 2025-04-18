@@ -195,7 +195,7 @@ static inline void process_scan(args_scan_t *args, __mram_ptr uint8_t *mrets) {
 }
 
 static inline void process_finalize(args_finalize_t *args, __mram_ptr uint8_t *_) {
-  object_finalize(args->oid, args->xid, args->csn, args->is_commit != 0);
+  object_finalize(args->oid, args->csn, args->is_commit != 0);
 }
 
 static inline void process_gc(args_gc_t *args, __mram_ptr uint8_t *_) {

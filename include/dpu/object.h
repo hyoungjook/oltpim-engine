@@ -80,10 +80,10 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
 /**
  * Finalize the object, on either commit or abort.
  * @param oid oid.
- * @param xid xid of the updater txn.
+ * REMOVED FOR OPTIMIZATION @param xid xid of the updater txn.
  * @param csn end_csn of the updater txn.
  * @param commit true if commit, false if abort
  */
-void object_finalize(oid_t oid, xid_t xid, csn_t csn, bool commit);
+void object_finalize(oid_t oid, csn_t csn, bool commit);
 
 #endif

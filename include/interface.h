@@ -127,11 +127,10 @@ _(4, scan, 1,                       \
     uint64_t values[0];             \
   , 8, 8 * (__rn), __VA_ARGS__)     \
 _(5, finalize, 0,                   \
-    uint64_t xid;                   \
     uint64_t csn;                   \
     uint32_t oid;                   \
     uint8_t is_commit;              \
-  , 24,                             \
+  , 16,                             \
     uint64_t pad;                   \
   , 8, -8, __VA_ARGS__)             \
 _(6, gc, 0,                         \

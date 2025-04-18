@@ -313,7 +313,7 @@ status_t object_update(oid_t oid, xid_t xid, csn_t csn, object_value_t new_value
   }
 }
 
-void object_finalize(oid_t oid, xid_t xid, csn_t csn, bool commit) {
+void object_finalize(oid_t oid, csn_t csn, bool commit) {
   __dma_aligned version_t ver_buf;
   version_id_t vid;
   if (!IS_SECONDARY_OID(oid)) { // primary
@@ -321,7 +321,9 @@ void object_finalize(oid_t oid, xid_t xid, csn_t csn, bool commit) {
     assert(vid != version_id_null);
     version_read(vid, &ver_buf);
     assert(!ver_buf.v.meta.is_free_slot);
-    assert(ver_buf.v.meta.dirty && ver_buf.v.csn == xid);
+    assert(ver_buf.v.meta.dirty 
+      //&& ver_buf.v.csn == xid
+    );
     if (commit) {
       // expose the dirty head
       ver_buf.v.csn = csn;
@@ -338,7 +340,9 @@ void object_finalize(oid_t oid, xid_t xid, csn_t csn, bool commit) {
     vid = SECONDARY_OID_TO_VID(oid);
     version_read(vid, &ver_buf);
     assert(!ver_buf.s.meta.is_free_slot);
-    assert(ver_buf.s.meta.dirty && ver_buf.s.begin_csn == xid);
+    assert(ver_buf.s.meta.dirty 
+      //&& ver_buf.s.begin_csn == xid
+    );
     if (commit) {
       ver_buf.s.begin_csn = csn;
       ver_buf.s.meta.dirty = false;
