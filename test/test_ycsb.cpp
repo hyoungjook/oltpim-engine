@@ -143,7 +143,8 @@ int main(int argc, char *argv[]) {
     .alloc_fn = nullptr,
     .gc_prob = 0.0,
     .enable_measure_energy = false,
-    .enable_interleave = true
+    .enable_interleave = true,
+    .enable_pim_wset = false
   });
 
   // Required to pin host threads to cores

@@ -108,7 +108,10 @@ void rank_buffer::finalize_args() {
   max_rlength = 0;
   for (int each_dpu = 0; each_dpu < _num_dpus; ++each_dpu) {
     uint32_t offset = offsets[each_dpu];
-    if (__builtin_expect(offset >= DPU_BUFFER_SIZE, 0)) abort();
+    if (__builtin_expect(offset >= DPU_BUFFER_SIZE, 0)) {
+      std::cerr << "DPU buffer size exceeded\n";
+      abort();
+    }
     // Store offset to the beginning of the buffer
     *(uint32_t*)bufs[each_dpu] = offset;
     // Compute max offsets
@@ -197,6 +200,10 @@ int rank_engine::init(config conf, information info) {
     uint32_t gc_transfer_id = _rank.register_dpu_transfer(
       info.dpu_gc_prob_symbol, (void**)(&gc_prob_buf), true);
     _rank.copy(gc_transfer_id, sizeof(uint64_t), true);
+    uint64_t wset_enable_buf = (conf.enable_pim_wset ? 1 : 0);
+    uint32_t wset_transfer_id = _rank.register_dpu_transfer(
+      info.dpu_pim_wset_symbol, (void**)(&wset_enable_buf), true);
+    _rank.copy(wset_transfer_id, sizeof(uint64_t), true);
   }
 
   // Lock
@@ -469,6 +476,7 @@ void engine::init(config conf) {
   rank_info.dpu_num_indexes_symbol = TOSTRING(DPU_NUM_INDEXES_SYMBOL);
   rank_info.dpu_index_infos_symbol = TOSTRING(DPU_INDEX_INFOS_SYMBOL);
   rank_info.dpu_gc_prob_symbol = TOSTRING(DPU_GC_PROB_SYMBOL);
+  rank_info.dpu_pim_wset_symbol = TOSTRING(DPU_PIM_WSET_ENABLE);
 
   OLTPIM_ASSERT(numa_available() >= 0);
   _num_numa_nodes = numa_max_node() + 1;
@@ -528,6 +536,7 @@ void engine::init(config conf) {
       rank_config.gc_prob = converted_gc_prob;
       rank_config.enable_interleave = conf.enable_interleave;
       rank_config.enable_measure_energy = conf.enable_measure_energy;
+      rank_config.enable_pim_wset = conf.enable_pim_wset;
       rank_info.rank_id = rank_id;
       // allocate rank_engine in its local numa node
       auto* re = (rank_engine*)wrapped_alloc_fn(sizeof(rank_engine), each_node);

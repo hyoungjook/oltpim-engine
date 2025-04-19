@@ -89,6 +89,7 @@ class rank_engine {
     uint32_t gc_prob;
     bool enable_measure_energy;
     bool enable_interleave;
+    bool enable_pim_wset;
   };
   struct information { // info passed from parent engine
     int rank_id;
@@ -97,6 +98,7 @@ class rank_engine {
     const char *dpu_args_symbol, *dpu_rets_symbol;
     const char *dpu_num_indexes_symbol, *dpu_index_infos_symbol;
     const char *dpu_gc_prob_symbol;
+    const char *dpu_pim_wset_symbol;
   };
   rank_engine() {}
   int init(config conf, information info);
@@ -204,6 +206,8 @@ class engine {
     bool enable_measure_energy;
     // Enable interleaving?
     bool enable_interleave;
+    // Enable PIM-side write set?
+    bool enable_pim_wset;
   };
   void init(config conf);
   void optimize_for_numa_local_key();

@@ -7,6 +7,7 @@
 #include "object.h"
 #include "global.h"
 #include "gc.h"
+#include "wset.h"
 
 #define NUM_INDEXES DPU_NUM_INDEXES_SYMBOL
 #define INDEX_INFOS DPU_INDEX_INFOS_SYMBOL
@@ -14,6 +15,9 @@
 __host uint64_t NUM_INDEXES;
 __host index_info INDEX_INFOS[DPU_MAX_NUM_INDEXES];
 static btree_t index_trees[DPU_MAX_NUM_INDEXES];
+
+__host uint64_t DPU_PIM_WSET_ENABLE;
+bool pim_wset_enabled;
 
 void process_init_global() {
   btree_init_global();
@@ -24,6 +28,8 @@ void process_init_global() {
   }
   object_init_global();
   gc_init_global();
+  pim_wset_enabled = (DPU_PIM_WSET_ENABLE != 0);
+  if (pim_wset_enabled) wset_init_global();
 }
 
 #define DECLARE_REQUEST_FUNC(_1, name, _2, _3, _4, _5, _6, ...) \
@@ -78,6 +84,7 @@ static inline void process_insert(args_insert_t *args, __mram_ptr uint8_t *mrets
   rets.oid = oid;
   rets.status = status;
   rets.add_to_write_set = (status == STATUS_SUCCESS && add_to_write_set);
+  if (pim_wset_enabled && rets.add_to_write_set) wset_add(xid, oid);
   mram_write(&rets, mrets, sizeof(rets_insert_t));
 }
 
@@ -127,6 +134,7 @@ static inline void process_update(args_update_t *args, __mram_ptr uint8_t *mrets
   rets.oid = oid;
   rets.status = status;
   rets.add_to_write_set = (status == STATUS_SUCCESS && add_to_write_set);
+  if (pim_wset_enabled && rets.add_to_write_set) wset_add(xid, oid);
   mram_write(&rets, mrets, sizeof(rets_update_t));
 }
 
@@ -149,6 +157,7 @@ static inline void process_remove(args_remove_t *args, __mram_ptr uint8_t *mrets
   rets.oid = oid;
   rets.status = status;
   rets.add_to_write_set = (status == STATUS_SUCCESS && add_to_write_set);
+  if (pim_wset_enabled && rets.add_to_write_set) wset_add(xid, oid);
   mram_write(&rets, mrets, sizeof(rets_remove_t));
 }
 
@@ -195,7 +204,25 @@ static inline void process_scan(args_scan_t *args, __mram_ptr uint8_t *mrets) {
 }
 
 static inline void process_finalize(args_finalize_t *args, __mram_ptr uint8_t *_) {
+  assert(!pim_wset_enabled);
   object_finalize(args->oid, args->csn, args->is_commit != 0);
+}
+
+struct finalize_ws_callback_arg {
+  uint64_t csn;
+  bool is_commit;
+};
+static void finalize_ws_callback(oid_t oid, void *arg) {
+  struct finalize_ws_callback_arg *a = (struct finalize_ws_callback_arg*)arg;
+  object_finalize(oid, a->csn, a->is_commit);
+}
+
+static inline void process_finalize_ws(args_finalize_ws_t *args, __mram_ptr uint8_t *_) {
+  assert(pim_wset_enabled);
+  struct finalize_ws_callback_arg arg;
+  arg.csn = args->csn;
+  arg.is_commit = args->xid_s.is_commit;
+  wset_traverse_remove(args->xid_s.xid, finalize_ws_callback, &arg);
 }
 
 static inline void process_gc(args_gc_t *args, __mram_ptr uint8_t *_) {

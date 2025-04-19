@@ -17,6 +17,7 @@ using request_get = request<request_type_get, args_get_t, rets_get_t>;
 using request_update = request<request_type_update, args_update_t, rets_update_t>;
 using request_remove = request<request_type_remove, args_remove_t, rets_remove_t>;
 using request_finalize = request_norets<request_type_finalize, args_finalize_t>;
+using request_finalize_ws = request_norets<request_type_finalize_ws, args_finalize_ws_t>;
 
 template <int rn>
 struct request_scan {
